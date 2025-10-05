@@ -91,7 +91,7 @@ app.post('/api/generate', upload.array('images', 5), async (req, res) => {
     }
 
     // Generate FRONT VIEW
-    const frontPrompt = [...contentParts, { text: 'Show the FRONT VIEW of the person wearing these clothes. Face forward, show the front of all clothing items clearly.' }];
+    const frontPrompt = [...contentParts, { text: 'Show the FRONT VIEW of the person wearing these clothes. Face forward, show the front of all clothing items clearly. Ensure item color consistency' }];
     const frontResp = await ai.models.generateContent({
       model: IMAGE_MODEL,
       contents: [{ role: 'user', parts: frontPrompt }],
@@ -102,7 +102,7 @@ app.post('/api/generate', upload.array('images', 5), async (req, res) => {
     const frontImg = frontParts.find(p => p.inlineData?.data);
 
     // Generate BACK VIEW
-    const backPrompt = [...contentParts, { text: 'Show the BACK VIEW of the person wearing these clothes. Turn around 180 degrees, show the back of all clothing items, back of head visible.' }];
+    const backPrompt = [...contentParts, { text: 'Show the BACK VIEW of the person wearing these clothes. Make sure to show all clothing items, and back of head visible. Ensure item color consistency.' }];
     const backResp = await ai.models.generateContent({
       model: IMAGE_MODEL,
       contents: [{ role: 'user', parts: backPrompt }],
@@ -156,7 +156,8 @@ app.post('/api/generate', upload.array('images', 5), async (req, res) => {
 // Uses inline base64 bytes (no short-lived fileUri). Vibe-centric scoring.
 app.post('/api/feedback', upload.single('image'), async (req, res) => {
   try {
-    const style = (req.body.style || '').toString().trim();
+  const style = (req.body.style || '').toString().trim();
+  console.log('[/api/feedback] Received style:', JSON.stringify(style));
     const file = req.file;
 
     if (!style) return res.status(400).json({ error: 'Missing style' });
@@ -244,7 +245,8 @@ Scoring guidance (two-decimal precision):
 // Analyzes uploaded image and vibe, returns personalized outfit recommendations
 app.post('/api/recommendations', upload.single('image'), async (req, res) => {
   try {
-    const vibe = (req.body.vibe || 'casual').toString().trim();
+  const vibe = (req.body.vibe || 'casual').toString().trim();
+  console.log('[/api/recommendations] Received vibe:', JSON.stringify(vibe));
     const file = req.file;
 
     if (!file) return res.status(400).json({ error: 'Missing image file' });
@@ -256,9 +258,9 @@ app.post('/api/recommendations', upload.single('image'), async (req, res) => {
 
     const recommendationPrompt = `
 You are a professional fashion stylist and personal shopper.
-Analyze the uploaded image of a person and recommend 4 complete outfit items that match their style and the target vibe: "${vibe}".
+Analyze the uploaded image of a person and recommend 4 complete outfit items that match them and the target theme or occasion: "${vibe}".
 
-IMPORTANT! Match the vibe: "${vibe}"
+IMPORTANT! Recommend four outfit items that match the occasion: "${vibe}". Not just denim jackets.
 Return ONE valid JSON object only (no commentary, no markdown).
 Schema:
 {
@@ -283,6 +285,7 @@ Requirements:
 - Provide realistic price estimates (range $50-$300 per item).
 - Make searchQuery specific enough for Google Shopping (include gender, style, color if relevant).
 - Ensure matchScore reflects how well the item suits both the person and the vibe (higher scores for better matches).
+- Ensure the recommended items are connected with the theme and vibe of ${vibe}.
 `;
 
     const resp = await ai.models.generateContent({
