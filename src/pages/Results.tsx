@@ -284,6 +284,23 @@ const Results = () => {
                       </div>
                     </div>
 
+                    {/* Component breakdown + detected garments + action plan */}
+                    <div className="p-4 rounded-lg bg-background/50">
+                      <p className="text-sm font-semibold text-accent mb-2">Detailed Breakdown</p>
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        {aiFeedback.components ? (
+                          Object.entries(aiFeedback.components).map(([k, v]: any) => (
+                            <div key={k} className="p-2 bg-muted rounded">
+                              <div className="text-xs uppercase text-muted-foreground">{k.replace('_', ' ')}</div>
+                              <div className="font-semibold">{Math.round((v ?? 0) * 100)}%</div>
+                            </div>
+                          ))
+                        ) : null}
+                      </div>
+
+                      {/* action_plan and detected_garments removed per user request */}
+                    </div>
+
                     {aiFeedback.tags?.length ? (
                       <div className="p-4 rounded-lg bg-background/50">
                         <p className="text-sm font-semibold text-accent mb-1">Detected features</p>

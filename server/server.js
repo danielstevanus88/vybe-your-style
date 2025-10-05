@@ -1,4 +1,7 @@
-import dotenv from 'dotenv';
+// server.js  — Express + Gemini (AI Studio) API
+// ESM module (node >= 18)
+
+import 'dotenv/config';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
@@ -7,283 +10,202 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GoogleGenAI } from '@google/genai';
 
-// Resolve server directory and load .env from the same folder as this file.
+// --- Setup .env and SDK ------------------------------------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.join(__dirname, '.env') });
-console.log('GEMINI_API_KEY present:', !!process.env.GEMINI_API_KEY, 'prefix=', (process.env.GEMINI_API_KEY || '').slice(0,8));
 
 const app = express();
 app.use(cors());
+app.use(express.json({ limit: '10mb' }));
 
 if (!process.env.GEMINI_API_KEY) {
-  console.error('No GEMINI_API_KEY found in environment. Please set GEMINI_API_KEY in server/.env or in the environment.');
+  console.error('❗ GEMINI_API_KEY missing. Set it in .env next to server.js');
 }
+console.log('Gemini key present:', !!process.env.GEMINI_API_KEY);
+
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Helper: pick a text-capable model by listing available models and selecting a Gemini/text model
-async function pickTextModel() {
-  try {
-    console.log('Listing available models to select a text-capable model...');
-    const list = await ai.models.list();
-    // Normalize possible return shapes: some SDKs return { models: [...] } or { models: { ... } }
-    let itemsRaw = list?.models ?? list;
-    let items = [];
-    if (Array.isArray(itemsRaw)) {
-      items = itemsRaw;
-    } else if (itemsRaw && typeof itemsRaw === 'object') {
-      // convert object values to an array
-      items = Object.values(itemsRaw);
-    } else {
-      items = [];
-    }
+// Known-good model IDs (fixed; no dynamic listing)
+const IMAGE_MODEL = 'gemini-2.5-flash-image'; // image generation & VTO experiments
+const TEXT_MODEL  = 'gemini-2.0-flash';       // fast text for JSON feedback
 
-    // Normalize model descriptors into simple entries { id, name, supports }
-    const normalized = (items || []).map((m) => {
-      // some SDKs return { name } or { model }
-      const id = m?.name || m?.model || (typeof m === 'string' ? m : undefined);
-      const supports = m?.supportedMethods || m?.capabilities || m?.support || '';
-      return { raw: m, id, supports };
-    }).filter(Boolean);
-
-    // Candidate priorities:
-    // 1) prefer explicit gemini-1.5-pro if available
-    // 2) gemini.* models that look text/chat capable
-    // 3) models whose id includes 'text' or 'chat'
-    // 4) any model that appears to support 'generateContent' or 'text' in capabilities
-    // 5) first available model id
-    let candidate = normalized.find((m) => /gemini-1.5-pro/i.test(m.id || ''))
-      || normalized.find((m) => /gemini/i.test(m.id || '') && !/image/i.test(m.id || ''))
-      || normalized.find((m) => /text|chat/i.test(m.id || ''))
-      || normalized.find((m) => /generate|text|chat/i.test(String(m.supports || '').toLowerCase()))
-      || normalized[0];
-
-    console.log('Model selection result:', candidate?.id || candidate?.raw || candidate);
-    return candidate?.id || undefined;
-  } catch (e) {
-    console.error('Failed to list models for selection', e?.message || e);
-    return undefined;
-  }
-}
-
-// In-memory upload; cap size & count server-side
+// --- Upload middleware -------------------------------------------------------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { files: 5, fileSize: 12 * 1024 * 1024 }, // 12MB per file
+  limits: { files: 5, fileSize: 12 * 1024 * 1024 }, // 12 MB per file
   fileFilter: (_req, file, cb) => {
     const ok = ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype);
-    cb(ok ? null : new Error('Unsupported image type'), ok);
+    cb(ok ? null : new Error('Unsupported image type (png/jpeg/webp only)'), ok);
   },
 });
 
+// Helper: push a buffer to Gemini Files API and return a content part (used by /api/generate)
+async function bufferToFilePart(buf, originalname, mimetype) {
+  const tmp = path.join(process.cwd(), '.tmp', `${Date.now()}-${originalname}`);
+  fs.mkdirSync(path.dirname(tmp), { recursive: true });
+  fs.writeFileSync(tmp, buf);
+  try {
+    const uploaded = await ai.files.upload({
+      file: tmp,
+      mimeType: mimetype,
+      displayName: originalname,
+    });
+    const fileUri = (uploaded?.file && uploaded.file.uri) || uploaded?.uri || uploaded?.fileUri;
+    if (!fileUri) throw new Error('Upload returned no file URI');
+    return { fileData: { fileUri, mimeType: mimetype } };
+  } finally {
+    // leave cleanup in place; /api/generate uses the Files API path
+    fs.unlink(tmp, () => {});
+  }
+}
+
+// --- POST /api/generate  (virtual try-on / image generation) -----------------
 app.post('/api/generate', upload.array('images', 5), async (req, res) => {
   try {
     const prompt = (req.body.prompt || '').toString().trim();
     const files = req.files || [];
-    console.log('Received upload request; prompt length:', prompt.length, 'files received:', files.length);
 
     if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
     if (!files.length) return res.status(400).json({ error: 'Upload 1–5 images' });
-    if (files.length > 5) return res.status(400).json({ error: 'Max 5 images' });
 
-    // Prefer the Files API (robust for size/reuse). Each upload returns a URI you can reference.
-    // Docs: ai.files.upload(...) then pass {fileData:{fileUri, mimeType}} in contents.  :contentReference[oaicite:2]{index=2}
-    const fileParts = [];
-    for (const f of files) {
-      // write a temp file so we can call ai.files.upload({ file: <path> })
-      const tmp = path.join(process.cwd(), '.tmp', `${Date.now()}-${f.originalname}`);
-      fs.mkdirSync(path.dirname(tmp), { recursive: true });
-      fs.writeFileSync(tmp, f.buffer);
-      const uploaded = await ai.files.upload({
-        file: tmp,
-        mimeType: f.mimetype,
-        displayName: f.originalname,
+    // Build contentParts array that interleaves human-readable descriptions with each file.
+    // This tells the model: file 1 = subject (person), files 2..N = outfit sources.
+    const contentParts = [];
+    const serverPromptIntro = `Important: The first uploaded image is the person (subject). Any additional uploaded images are outfit images that should be used as clothing sources. Transfer clothing and details from the outfit images onto the subject in a realistic way. Preserve the subject's pose and scene lighting. Do NOT add or remove body parts or extra people. If an outfit image depicts a dress, do NOT add pants or lower-body garments. For outerwear or hoodies, transfer top-layer details (hood, collar, texture) but do not obscure the face or change identity. Avoid compositing seams, text, watermarks, or UI. Frame the subject centrally (occupying ~60-80% of image height). Return a single PNG image only.`;
+    contentParts.push({ text: serverPromptIntro });
+    contentParts.push({ text: `Client instructions: ${prompt}` });
+
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const label = i === 0 ? 'Subject image (person) — do not change identity or face.' : `Outfit image ${i} — clothing source. Use these garments to dress the subject (do not add extra people).`;
+      // attach a small textual hint before each file to make its purpose explicit
+      contentParts.push({ text: label });
+      contentParts.push(await bufferToFilePart(f.buffer, f.originalname, f.mimetype));
+    }
+
+    const resp = await ai.models.generateContent({
+      model: IMAGE_MODEL,
+      contents: [{ role: 'user', parts: contentParts }],
+      config: { responseModalities: ['IMAGE'] },
+    });
+
+    const parts = resp?.candidates?.[0]?.content?.parts ?? [];
+    const img = parts.find(p => p.inlineData?.data);
+
+    if (!img) {
+      const finish = resp?.candidates?.[0]?.finishReason || 'UNKNOWN';
+      const safety = resp?.candidates?.[0]?.safetyRatings || resp?.candidates?.[0]?.safetyReasons || [];
+      return res.status(422).json({
+        error: 'Model did not return an image',
+        finishReason: finish,
+        safety,
       });
-      // Support different response shapes from the Files API (some versions return { file: { uri } },
-      // others return a top-level { uri } or fileUri).
-      if (!uploaded) {
-        console.error('Uploaded response missing entirely:', JSON.stringify(uploaded).slice(0, 1000));
-        return res.status(500).json({ error: 'Upload to AI files API failed: empty response' });
-      }
-      const fileUri = (uploaded.file && uploaded.file.uri) || uploaded.uri || uploaded.fileUri;
-      if (!fileUri) {
-        console.error('Uploaded response missing any file URI; full response:', JSON.stringify(uploaded).slice(0, 1000));
-        return res.status(500).json({ error: 'Upload to AI files API failed: missing file URI in response' });
-      }
-      console.log('Uploaded file URI selected:', fileUri);
-      // Clean up temp file
-      fs.unlink(tmp, () => {});
-      // Part that references the uploaded file (use detected fileUri)
-      fileParts.push({ fileData: { fileUri, mimeType: f.mimetype } });
     }
 
-    // Log summary of uploaded file URIs that will be sent to the model (no secrets)
-    const uploadedUris = fileParts.map((p) => p.fileData?.fileUri).filter(Boolean);
-    console.log('Total uploaded fileUris to pass to model:', uploadedUris.length);
-    console.log('fileUris:', uploadedUris);
-
-    // Generate two views (Front, Back) by making separate model calls.
-    const views = ['Front View', 'Back View'];
-    const results = [];
-    for (const view of views) {
-      try {
-  // Strong, explicit instructions to avoid artifacts and enforce fashion rules + framing.
-  const viewPrompt = `${view}. Using the uploaded person as the single subject, generate one realistic, photo-quality ${view.toLowerCase()} virtual try-on image that transfers clothing from the provided outfit images onto the same person. Preserve the subject's natural pose and the scene's lighting. Frame the person centrally: the subject should occupy roughly 60–80% of image height, be centered horizontally, and be clearly visible (head to just below the knees for front view; full back for back view).
-  If the provided outfit is a dress, render only the dress for the lower body (do NOT add pants, leggings, or other lower-body garments). Do NOT add, remove, or duplicate body parts (no extra limbs or extra people). Avoid visible compositing seams, overlays, watermarks, text, or UI. Use realistic shadows and consistent skin tones so the clothing appears naturally worn by the subject. Return a single PNG image only, with no captions or surrounding UI.`;
-        console.log('Sending to model for view:', view, { promptPreview: viewPrompt.slice(0, 200), fileUris: uploadedUris });
-        const resp = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-image',
-          contents: [{ role: 'user', parts: [{ text: viewPrompt }, ...fileParts] }],
-          config: { responseModalities: ['IMAGE'] },
-        });
-
-        const partsForView = resp.candidates?.[0]?.content?.parts ?? [];
-        const imagePartForView = partsForView.find((p) => p.inlineData?.data);
-        if (!imagePartForView) {
-          console.error('No image returned for view', view, 'response truncated:', JSON.stringify(resp).slice(0, 1000));
-          results.push({ view, error: 'No image returned' });
-          continue;
-        }
-
-        results.push({
-          view,
-          mimeType: imagePartForView.inlineData.mimeType || 'image/png',
-          data: imagePartForView.inlineData.data,
-        });
-      } catch (viewErr) {
-        console.error('Model call failed for view', view, viewErr?.message || viewErr);
-        const body = viewErr?.response?.body || viewErr?.body || viewErr?.message;
-        console.error('Model error body (truncated):', typeof body === 'string' ? body.slice(0, 1000) : body);
-        results.push({ view, error: typeof body === 'string' ? body : String(body) });
-      }
-    }
-
-    return res.json({ results });
+    // Return in the shape your Results.tsx expects
+    return res.json({
+      results: [{
+        view: 'Generated',
+        mimeType: img.inlineData.mimeType || 'image/png',
+        data: img.inlineData.data, // base64
+      }],
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err?.message || 'Generation failed' });
+    const body = err?.response?.body || err?.body || err?.message || String(err);
+    console.error('generate error:', body);
+    return res.status(500).json({ error: typeof body === 'string' ? body : String(body) });
   }
 });
 
-// POST /api/feedback
-// Accepts: form field 'style' (string) and one image file named 'image'
+// --- POST /api/feedback  (text analysis of an outfit image) ------------------
+// CHANGED: uses inline base64 bytes instead of Files API URIs to avoid
+// "File ... not exist" errors. No other behavior is altered.
 app.post('/api/feedback', upload.single('image'), async (req, res) => {
   try {
     const style = (req.body.style || '').toString().trim();
     const file = req.file;
+
     if (!style) return res.status(400).json({ error: 'Missing style' });
-    if (!file) return res.status(400).json({ error: 'Missing image file' });
+    if (!file)  return res.status(400).json({ error: 'Missing image file' });
 
-    // write temp file and upload
-    const tmp = path.join(process.cwd(), '.tmp', `${Date.now()}-${file.originalname}`);
-    fs.mkdirSync(path.dirname(tmp), { recursive: true });
-    fs.writeFileSync(tmp, file.buffer);
-    let uploaded;
-    try {
-      uploaded = await ai.files.upload({ file: tmp, mimeType: file.mimetype, displayName: file.originalname });
-    } finally {
-      fs.unlink(tmp, () => {});
-    }
-    if (!uploaded) return res.status(500).json({ error: 'Upload failed' });
-    const fileUri = (uploaded.file && uploaded.file.uri) || uploaded.uri || uploaded.fileUri;
-    if (!fileUri) return res.status(500).json({ error: 'Upload returned no file URI' });
+    // 👇 Inline the image directly (no short-lived fileUri)
+    const filePart = {
+      inlineData: { data: file.buffer.toString('base64'), mimeType: file.mimetype }
+    };
 
-    // Build a prompt asking for a JSON-only analysis
-    const analysisPrompt = `You are a professional fashion stylist and critic. Given the provided image (the uploaded outfit) and the target style: "${style}", analyze how well the outfit matches the target style.
-Return ONLY a single valid JSON object (no surrounding explanation) with the following shape:
+  const analysisPrompt = `You are a professional fashion stylist and critic. Given the provided image (the uploaded outfit) and the target style: "${style}", produce a concise, structured JSON analysis. IMPORTANT: Return ONLY a single valid JSON object with NO surrounding commentary. EXACTLY follow the schema below.
+
+Schema (required):
 {
-  "overall_score": number between 0 and 1,
+  "overall_score": number between 0 and 1, // weighted average, two-decimal precision (e.g. 0.78)
+  "components": {
+    "fit": number between 0 and 1,
+    "color": number between 0 and 1,
+    "proportions": number between 0 and 1,
+    "cohesion": number between 0 and 1,
+    "vibe_match": number between 0 and 1 // how closely the look matches the requested vibe/style
+  },
+  "weights": { "fit": number, "color": number, "proportions": number, "cohesion": number, "vibe_match": number }, // sum to 1
   "vibe": short text summary (1-2 sentences),
   "tips": [ { "label": string, "text": string, "score": number between 0 and 1 (optional) } ],
   "tags": [ string ]
 }
 
-Focus only on garments, colors, fit, proportions, and cohesion. Do NOT mention or describe faces or identities. Be concise and actionable in tips.`;
+Rules and scoring instructions:
+- Calculate each component (fit, color, proportions, cohesion) as a number in [0,1] with two decimal places.
+- Use the provided weights to compute overall_score as the weighted sum of the components, and ensure overall_score equals that calculation (round to two decimals).
+- Prefer these default weights unless a reason to change is obvious: fit=0.30, color=0.20, proportions=0.15, cohesion=0.15, vibe_match=0.20. Include the weights object in the output.
+- Do NOT output a constant or canned score. Base numbers on clear visual criteria: how well garments fit the subject, color harmony and contrast, proportional balance (lengths/silhouette), and how cohesive the outfit feels.
+ - Important rule: If the detected garments strongly mismatch the requested vibe (for example: target "formal" but detected garments include 't-shirt', 'hoodie', 'sweatpants' with confidence > 0.6), set 'vibe_match' to a low value (<= 0.25) unless the action_plan includes immediate swaps that would change garments. Do not allow a high overall_score when garment types contradict the requested vibe.
+ - Provide 2–4 concise actionable tips in the tips array (label + short text). Optionally include a per-tip score in [0,1].
+ - Provide a prioritized 'action_plan' array (3 items max) that recommends exact swaps or alterations (e.g., "Swap sweatshirt for a navy blazer + white dress shirt"), each with an 'impact_estimate' in [0,1] estimating how much that change would improve 'vibe_match'.
+- Do NOT mention faces, identities, or personal attributes unrelated to clothing. Do NOT include code fences.
+- Keep the JSON compact (no extra fields). Example output:
+{
+  "overall_score": 0.82,
+  "components": { "fit": 0.90, "color": 0.75, "proportions": 0.70, "cohesion": 0.75 },
+  "weights": { "fit": 0.35, "color": 0.25, "proportions": 0.2, "cohesion": 0.2 },
+  "vibe": "Smart-casual, clean lines with a flattering silhouette.",
+  "tips": [ { "label": "Adjust Hem", "text": "Shorten the hem slightly for better proportion with these shoes.", "score": 0.7 } ],
+  "tags": ["smart-casual","neutral palette","balanced silhouette"]
+}
 
-    // Call model with the file reference
-    // Attempt to find multiple candidate text models and try them until one succeeds.
-    let modelResp;
-    try {
-      // Get model list and build candidate ids (de-duplicated)
-      const list = await ai.models.list();
-      // Normalize list result into an array similar to pickTextModel
-      let itemsRaw = list?.models ?? list;
-      let items = [];
-      if (Array.isArray(itemsRaw)) {
-        items = itemsRaw;
-      } else if (itemsRaw && typeof itemsRaw === 'object') {
-        items = Object.values(itemsRaw);
-      } else {
-        items = [];
-      }
-      const ids = Array.from(new Set((items || []).map((m) => m?.name || m?.model || m).filter(Boolean)));
+Focus strictly on clothing, colors, fit, proportions, and cohesion. Be precise in numbers and consistent with the weighted overall score.`;
 
-      // Ensure we have some sensible fallbacks appended (but do not prefer them over listed models)
-      const fallbacks = ['text-bison', 'gemini-2.1', 'gemini-1'];
-      const candidates = ids.concat(fallbacks).slice(0, 20); // limit attempts
+    const resp = await ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: [{ role: 'user', parts: [{ text: analysisPrompt }, filePart] }],
+      config: { responseModalities: ['TEXT'] },
+    });
 
-      console.log('Feedback model candidates:', candidates.slice(0, 8));
-      let lastErr;
-      for (const candidate of candidates) {
-        try {
-          console.log('Trying feedback model:', candidate);
-          modelResp = await ai.models.generateContent({
-            model: candidate,
-            contents: [{ role: 'user', parts: [{ text: analysisPrompt }, { fileData: { fileUri, mimeType: file.mimetype } }] }],
-            config: { responseModalities: ['TEXT'] },
-          });
-          // Basic sanity check: did we receive any text parts?
-          const parts = modelResp?.candidates?.[0]?.content?.parts ?? [];
-          const textPart = parts.find((p) => p.text || p.type === 'output_text');
-          if (textPart) {
-            console.log('Model', candidate, 'returned text; using it for parsing.');
-            break; // keep modelResp
-          }
-          // If no text, treat as failure and try next
-          lastErr = new Error('No text returned');
-        } catch (inner) {
-          console.warn('Model', candidate, 'failed:', inner?.message || inner);
-          lastErr = inner;
-          // try next candidate
-        }
-      }
+    const parts = resp?.candidates?.[0]?.content?.parts ?? [];
+    const textPart = parts.find(p => p.text) || {};
+    const text = textPart.text || parts.map(p => p.text).filter(Boolean).join('\n');
 
-      if (!modelResp) {
-        console.error('All model candidates failed for feedback:', lastErr?.message || lastErr);
-        const body = lastErr?.response?.body || lastErr?.body || lastErr?.message || String(lastErr);
-        return res.status(500).json({ error: 'All feedback model attempts failed', detail: typeof body === 'string' ? body : String(body) });
-      }
-    } catch (e) {
-      console.error('Feedback model selection/listing error', e?.message || e);
-      const body = e?.response?.body || e?.body || e?.message;
-      return res.status(500).json({ error: 'Failed to list or call models for feedback', detail: typeof body === 'string' ? body : String(body) });
+    if (!text) {
+      const finish = resp?.candidates?.[0]?.finishReason || 'UNKNOWN';
+      return res.status(502).json({ error: 'Model did not return text', finishReason: finish });
     }
 
-    const parts = modelResp.candidates?.[0]?.content?.parts ?? [];
-    // find textual part
-    const textPart = parts.find((p) => p.text || p.role === 'assistant' || p.type === 'output_text');
-    const text = (textPart && (textPart.text || textPart.content || textPart.output_text)) || parts.map(p => p.text || '').join('\n');
-    if (!text) return res.status(500).json({ error: 'No textual analysis returned' });
-
-    // Try to parse JSON from the model output
+    // Strip code fences if present and parse JSON
+    const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/\s*```$/i, '');
     let parsed;
     try {
-      // The model should return JSON only; attempt direct parse or extract JSON block
-      const jsonText = text.trim();
-      // If the text starts with a code fence, strip it
-      const cleaned = jsonText.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
       parsed = JSON.parse(cleaned);
-    } catch (err) {
-      console.error('Failed to parse JSON from model output:', text.slice(0, 1000));
-      return res.status(500).json({ error: 'Could not parse analysis JSON', raw: text });
+    } catch {
+      return res.status(500).json({ error: 'Could not parse analysis JSON', raw: text.slice(0, 1000) });
     }
 
     return res.json(parsed);
   } catch (err) {
-    console.error('Feedback route error', err);
-    return res.status(500).json({ error: err?.message || 'Feedback failed' });
+    const body = err?.response?.body || err?.body || err?.message || String(err);
+    console.error('feedback error:', body);
+    return res.status(500).json({ error: typeof body === 'string' ? body : String(body) });
   }
 });
 
+// --- Start -------------------------------------------------------------------
 const port = Number(process.env.PORT) || 5001;
-app.listen(port, () => console.log(`Server listening on http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`✅ API listening at http://localhost:${port}`);
+});
