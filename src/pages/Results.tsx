@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ChevronLeft, Heart, Sparkles, ShoppingBag, RefreshCw } from "lucide-react";
+import { ChevronLeft, Heart, Sparkles, ShoppingBag, RefreshCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import outfit1 from "@/assets/outfit-1-denim-tee.jpg";
 import outfit2 from "@/assets/outfit-2-blazer.jpg";
@@ -13,7 +13,9 @@ const Results = () => {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [selectedOutfits, setSelectedOutfits] = useState<number[]>([]);
   const [showGenerated, setShowGenerated] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [customClothes, setCustomClothes] = useState<string[]>([]);
+  const virtualTryOnRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -39,13 +41,29 @@ const Results = () => {
     );
   };
 
-  const handleGenerateImages = () => {
+  const handleGenerateImages = async () => {
     if (selectedOutfits.length === 0) {
       toast.error("Please select at least one outfit");
       return;
     }
+    
+    setIsGenerating(true);
+    toast.info("AI is generating your virtual try-on images...");
+    
+    // Simulate AI generation (replace with actual API call)
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    setIsGenerating(false);
     setShowGenerated(true);
-    toast.success("Generating your virtual try-on images!");
+    toast.success("Virtual try-on complete!");
+    
+    // Auto-scroll to the generated section
+    setTimeout(() => {
+      virtualTryOnRef.current?.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'start' 
+      });
+    }, 100);
   };
 
   const handleSaveToGallery = () => {
@@ -235,11 +253,20 @@ const Results = () => {
           <div className="flex flex-wrap gap-4 justify-center mb-8">
             <Button
               onClick={handleGenerateImages}
-              disabled={selectedOutfits.length === 0}
+              disabled={selectedOutfits.length === 0 || isGenerating}
               className="bg-gradient-to-r from-accent to-purple-600 hover:shadow-elegant transition-smooth px-8"
             >
-              <Sparkles className="w-4 h-4 mr-2" />
-              Generate Virtual Try-On
+              {isGenerating ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Generate Virtual Try-On
+                </>
+              )}
             </Button>
             <Button variant="outline" className="transition-smooth">
               <RefreshCw className="w-4 h-4 mr-2" />
@@ -247,9 +274,30 @@ const Results = () => {
             </Button>
           </div>
 
+          {/* Loading UI */}
+          {isGenerating && (
+            <div className="mt-12 p-12 bg-card rounded-3xl border border-border shadow-elegant">
+              <div className="flex flex-col items-center justify-center space-y-6">
+                <div className="relative">
+                  <Loader2 className="w-16 h-16 text-accent animate-spin" />
+                  <Sparkles className="w-8 h-8 text-accent absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
+                </div>
+                <div className="text-center space-y-2">
+                  <h3 className="text-2xl font-bold">AI is Creating Your Look</h3>
+                  <p className="text-muted-foreground">Generating your virtual try-on images from multiple angles...</p>
+                </div>
+                <div className="flex gap-2">
+                  <div className="w-3 h-3 bg-accent rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-3 h-3 bg-accent rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-3 h-3 bg-accent rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Generated Images Section */}
-          {showGenerated && (
-            <div className="mt-12">
+          {showGenerated && !isGenerating && (
+            <div ref={virtualTryOnRef} className="mt-12 scroll-mt-8">
               <h2 className="text-3xl font-bold mb-6">Your Virtual Try-On</h2>
               <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 {['Front View', 'Back View', 'Left Side', 'Right Side'].map((view, idx) => (
