@@ -71,13 +71,20 @@ app.post('/api/generate', upload.array('images', 5), async (req, res) => {
     // Build contentParts array that interleaves human-readable descriptions with each file.
     // This tells the model: file 1 = subject (person), files 2..N = outfit sources.
     const contentParts = [];
-    const serverPromptIntro = `Important: The first uploaded image is the person (subject). Any additional uploaded images are outfit images that should be used as clothing sources. Transfer clothing and details from the outfit images onto the subject in a realistic way. Preserve the subject's pose and scene lighting. Do NOT add or remove body parts or extra people. If an outfit image depicts a dress, do NOT add pants or lower-body garments. For outerwear or hoodies, transfer top-layer details (hood, collar, texture) but do not obscure the face or change identity. Avoid compositing seams, text, watermarks, or UI. Frame the subject centrally (occupying ~60-80% of image height). Return a single PNG image only.`;
+    const serverPromptIntro =
+      `Important: The first uploaded image is the person (subject). Any additional uploaded images are outfit images that should be used as clothing sources. ` +
+      `Transfer clothing and details from the outfit images onto the subject in a realistic way. Preserve the subject's pose and scene lighting. ` +
+      `Do NOT add or remove body parts or extra people. If an outfit image depicts a dress, do NOT add pants or lower-body garments. ` +
+      `For outerwear or hoodies, transfer top-layer details (hood, collar, texture) but do not obscure the face or change identity. ` +
+      `Avoid compositing seams, text, watermarks, or UI. Frame the subject centrally (occupying ~60–80% of image height). Return a single PNG image only.`;
     contentParts.push({ text: serverPromptIntro });
     contentParts.push({ text: `Client instructions: ${prompt}` });
 
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-      const label = i === 0 ? 'Subject image (person) — do not change identity or face.' : `Outfit image ${i} — clothing source. Use these garments to dress the subject (do not add extra people).`;
+      const label = i === 0
+        ? 'Subject image (person) — do not change identity or face.'
+        : `Outfit image ${i} — clothing source. Use these garments to dress the subject (do not add extra people).`;
       // attach a small textual hint before each file to make its purpose explicit
       contentParts.push({ text: label });
       contentParts.push(await bufferToFilePart(f.buffer, f.originalname, f.mimetype));
@@ -118,8 +125,7 @@ app.post('/api/generate', upload.array('images', 5), async (req, res) => {
 });
 
 // --- POST /api/feedback  (text analysis of an outfit image) ------------------
-// CHANGED: uses inline base64 bytes instead of Files API URIs to avoid
-// "File ... not exist" errors. No other behavior is altered.
+// Uses inline base64 bytes (no short-lived fileUri). Vibe-centric scoring.
 app.post('/api/feedback', upload.single('image'), async (req, res) => {
   try {
     const style = (req.body.style || '').toString().trim();
@@ -128,49 +134,49 @@ app.post('/api/feedback', upload.single('image'), async (req, res) => {
     if (!style) return res.status(400).json({ error: 'Missing style' });
     if (!file)  return res.status(400).json({ error: 'Missing image file' });
 
-    // 👇 Inline the image directly (no short-lived fileUri)
+    // Inline the image directly (no short-lived fileUri)
     const filePart = {
       inlineData: { data: file.buffer.toString('base64'), mimeType: file.mimetype }
     };
 
-  const analysisPrompt = `You are a professional fashion stylist and critic. Given the provided image (the uploaded outfit) and the target style: "${style}", produce a concise, structured JSON analysis. IMPORTANT: Return ONLY a single valid JSON object with NO surrounding commentary. EXACTLY follow the schema below.
+    // Vibe-forward analysis prompt (no example JSON to avoid echoing)
+    const analysisPrompt = `
+You are a professional fashion stylist and aesthetic analyst.
+Evaluate how well the uploaded outfit expresses the target vibe: "${style}".
 
-Schema (required):
+Return ONE valid JSON object only (no commentary, no markdown).
+Schema:
 {
-  "overall_score": number between 0 and 1, // weighted average, two-decimal precision (e.g. 0.78)
+  "overall_score": number (0–1, two decimals),
   "components": {
-    "fit": number between 0 and 1,
-    "color": number between 0 and 1,
-    "proportions": number between 0 and 1,
-    "cohesion": number between 0 and 1,
-    "vibe_match": number between 0 and 1 // how closely the look matches the requested vibe/style
+    "fit": number (0–1),
+    "color": number (0–1),
+    "proportions": number (0–1),
+    "cohesion": number (0–1),
+    "vibe_match": number (0–1)
   },
-  "weights": { "fit": number, "color": number, "proportions": number, "cohesion": number, "vibe_match": number }, // sum to 1
-  "vibe": short text summary (1-2 sentences),
-  "tips": [ { "label": string, "text": string, "score": number between 0 and 1 (optional) } ],
+  "weights": { "fit": number, "color": number, "proportions": number, "cohesion": number, "vibe_match": number },
+  "vibe": string (<= 2 sentences),
+  "tips": [ { "label": string, "text": string, "score": number (0–1, optional) } ],
+  "action_plan": [ { "recommendation": string, "impact_estimate": number (0–1) } ],
   "tags": [ string ]
 }
 
-Rules and scoring instructions:
-- Calculate each component (fit, color, proportions, cohesion) as a number in [0,1] with two decimal places.
-- Use the provided weights to compute overall_score as the weighted sum of the components, and ensure overall_score equals that calculation (round to two decimals).
-- Prefer these default weights unless a reason to change is obvious: fit=0.30, color=0.20, proportions=0.15, cohesion=0.15, vibe_match=0.20. Include the weights object in the output.
-- Do NOT output a constant or canned score. Base numbers on clear visual criteria: how well garments fit the subject, color harmony and contrast, proportional balance (lengths/silhouette), and how cohesive the outfit feels.
- - Important rule: If the detected garments strongly mismatch the requested vibe (for example: target "formal" but detected garments include 't-shirt', 'hoodie', 'sweatpants' with confidence > 0.6), set 'vibe_match' to a low value (<= 0.25) unless the action_plan includes immediate swaps that would change garments. Do not allow a high overall_score when garment types contradict the requested vibe.
- - Provide 2–4 concise actionable tips in the tips array (label + short text). Optionally include a per-tip score in [0,1].
- - Provide a prioritized 'action_plan' array (3 items max) that recommends exact swaps or alterations (e.g., "Swap sweatshirt for a navy blazer + white dress shirt"), each with an 'impact_estimate' in [0,1] estimating how much that change would improve 'vibe_match'.
-- Do NOT mention faces, identities, or personal attributes unrelated to clothing. Do NOT include code fences.
-- Keep the JSON compact (no extra fields). Example output:
-{
-  "overall_score": 0.82,
-  "components": { "fit": 0.90, "color": 0.75, "proportions": 0.70, "cohesion": 0.75 },
-  "weights": { "fit": 0.35, "color": 0.25, "proportions": 0.2, "cohesion": 0.2 },
-  "vibe": "Smart-casual, clean lines with a flattering silhouette.",
-  "tips": [ { "label": "Adjust Hem", "text": "Shorten the hem slightly for better proportion with these shoes.", "score": 0.7 } ],
-  "tags": ["smart-casual","neutral palette","balanced silhouette"]
-}
+Weights (sum to 1, vibe-forward):
+- vibe_match = 0.55
+- fit = 0.15
+- color = 0.10
+- proportions = 0.10
+- cohesion = 0.10
 
-Focus strictly on clothing, colors, fit, proportions, and cohesion. Be precise in numbers and consistent with the weighted overall score.`;
+Scoring guidance (two-decimal precision):
+- Compute overall_score = weighted sum of components.
+- Judge fit/color/proportions/cohesion ONLY in relation to how well they support the target vibe.
+- Penalize elements that clearly contradict the vibe (e.g., sneakers with formal tux).
+  If major elements oppose the vibe, set vibe_match ≤ 0.25 and cap overall_score ≤ 0.55.
+- Keep feedback specific and actionable (2–4 tips, up to 3 action_plan items).
+- Do not mention faces, identity, or background. Focus strictly on clothing, silhouette, layering, and color relationships.
+`;
 
     const resp = await ai.models.generateContent({
       model: TEXT_MODEL,
