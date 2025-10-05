@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ChevronLeft, Heart, Sparkles, ShoppingBag, RefreshCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { putImage } from "@/lib/idb";
 import outfit1 from "@/assets/outfit-1-denim-tee.jpg";
 import outfit2 from "@/assets/outfit-2-blazer.jpg";
 import outfit3 from "@/assets/outfit-3-dress.jpg";
@@ -233,24 +234,54 @@ Generate a high-quality, photorealistic result showing the complete outfit.`;
     }
   };
 
-  const handleSaveToGallery = () => {
+  const handleSaveToGallery = async () => {
     try {
-      const existing = JSON.parse(localStorage.getItem('vybe_saved_looks') || '[]');
+      // Must have at least one generated image with a data src to save
+      const hasAnySrc = generatedImages.some((g) => !!g.src);
+      if (!hasAnySrc) {
+        toast.error('No generated images available to save. Please generate front/back views first.');
+        return;
+      }
+
+      const existingRaw = localStorage.getItem('vybe_saved_looks');
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
       const id = Date.now();
       const name = `Saved Look ${new Date(id).toLocaleString()}`;
-      const entry = {
+
+      // Normalize generatedImages into explicit front/back fields
+      const front = generatedImages[0] || { view: 'Front View', src: undefined };
+      const back = generatedImages[1] || generatedImages[0] || { view: 'Back View', src: undefined };
+
+      // store large image blobs in IndexedDB and save keys in metadata
+      const frontKey = `look_${id}_front`;
+      const backKey = `look_${id}_back`;
+
+      const metaEntry: any = {
         id,
         name,
         date: new Date(id).toISOString().slice(0,10),
         outfits: generatedImages.length,
-        images: generatedImages.map((g, idx) => ({ src: g.src, view: g.view || `View ${idx+1}` })),
+        front: { key: frontKey, view: front.view || 'Front View' },
+        back: { key: backKey, view: back.view || 'Back View' },
       };
-      existing.unshift(entry);
+
+      // First store actual image blobs into IndexedDB. If this fails, do not persist metadata.
+      try {
+        if (front.src) await putImage(frontKey, front.src);
+        if (back.src) await putImage(backKey, back.src);
+      } catch (e) {
+        console.error('Failed to store images in IndexedDB, aborting save', e);
+        toast.error('Failed to store images locally. Save aborted.');
+        return;
+      }
+
+      // persist metadata only after images are safely stored
+      existing.unshift(metaEntry);
       localStorage.setItem('vybe_saved_looks', JSON.stringify(existing));
       toast.success('Look saved to your gallery!');
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to save look', e);
-      toast.error('Failed to save look');
+      toast.error(e?.message || 'Failed to save look');
     }
   };
 

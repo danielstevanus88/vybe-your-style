@@ -90,33 +90,61 @@ app.post('/api/generate', upload.array('images', 5), async (req, res) => {
       contentParts.push(await bufferToFilePart(f.buffer, f.originalname, f.mimetype));
     }
 
-    const resp = await ai.models.generateContent({
+    // Generate FRONT VIEW
+    const frontPrompt = [...contentParts, { text: 'Show the FRONT VIEW of the person wearing these clothes. Face forward, show the front of all clothing items clearly.' }];
+    const frontResp = await ai.models.generateContent({
       model: IMAGE_MODEL,
-      contents: [{ role: 'user', parts: contentParts }],
+      contents: [{ role: 'user', parts: frontPrompt }],
       config: { responseModalities: ['IMAGE'] },
     });
 
-    const parts = resp?.candidates?.[0]?.content?.parts ?? [];
-    const img = parts.find(p => p.inlineData?.data);
+    const frontParts = frontResp?.candidates?.[0]?.content?.parts ?? [];
+    const frontImg = frontParts.find(p => p.inlineData?.data);
 
-    if (!img) {
-      const finish = resp?.candidates?.[0]?.finishReason || 'UNKNOWN';
-      const safety = resp?.candidates?.[0]?.safetyRatings || resp?.candidates?.[0]?.safetyReasons || [];
+    // Generate BACK VIEW
+    const backPrompt = [...contentParts, { text: 'Show the BACK VIEW of the person wearing these clothes. Turn around 180 degrees, show the back of all clothing items, back of head visible.' }];
+    const backResp = await ai.models.generateContent({
+      model: IMAGE_MODEL,
+      contents: [{ role: 'user', parts: backPrompt }],
+      config: { responseModalities: ['IMAGE'] },
+    });
+
+    const backParts = backResp?.candidates?.[0]?.content?.parts ?? [];
+    const backImg = backParts.find(p => p.inlineData?.data);
+
+    // Collect results
+    const results = [];
+
+    if (frontImg) {
+      results.push({
+        view: 'Front View',
+        mimeType: frontImg.inlineData.mimeType || 'image/png',
+        data: frontImg.inlineData.data,
+      });
+    }
+
+    if (backImg) {
+      results.push({
+        view: 'Back View',
+        mimeType: backImg.inlineData.mimeType || 'image/png',
+        data: backImg.inlineData.data,
+      });
+    }
+
+    if (results.length === 0) {
+      const finish = frontResp?.candidates?.[0]?.finishReason || 'UNKNOWN';
+      const safety = frontResp?.candidates?.[0]?.safetyRatings || frontResp?.candidates?.[0]?.safetyReasons || [];
       return res.status(422).json({
-        error: 'Model did not return an image',
+        error: 'Model did not return any images',
         finishReason: finish,
         safety,
       });
     }
 
-    // Return in the shape your Results.tsx expects
-    return res.json({
-      results: [{
-        view: 'Generated',
-        mimeType: img.inlineData.mimeType || 'image/png',
-        data: img.inlineData.data, // base64
-      }],
-    });
+    console.log(`✅ Generated ${results.length} views (Front: ${!!frontImg}, Back: ${!!backImg})`);
+
+    // Return both front and back views
+    return res.json({ results });
   } catch (err) {
     const body = err?.response?.body || err?.body || err?.message || String(err);
     console.error('generate error:', body);
