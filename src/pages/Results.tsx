@@ -26,10 +26,10 @@ const Results = () => {
 
   // Mock outfit recommendations
   const outfitRecommendations = [
-    { id: 1, name: 'Classic Denim & White Tee', price: '$89', style: 'Timeless casual', image: outfit1 },
-    { id: 2, name: 'Blazer & Trousers Combo', price: '$199', style: 'Professional chic', image: outfit2 },
-    { id: 3, name: 'Flowy Summer Dress', price: '$129', style: 'Effortless elegance', image: outfit3 },
-    { id: 4, name: 'Streetwear Hoodie Set', price: '$149', style: 'Urban cool', image: outfit4 },
+    { id: 1, name: 'Classic Denim & White Tee', price: '$89', style: 'Timeless casual', image: outfit1, matchScore: 94 },
+    { id: 2, name: 'Blazer & Trousers Combo', price: '$199', style: 'Professional chic', image: outfit2, matchScore: 88 },
+    { id: 3, name: 'Flowy Summer Dress', price: '$129', style: 'Effortless elegance', image: outfit3, matchScore: 91 },
+    { id: 4, name: 'Streetwear Hoodie Set', price: '$149', style: 'Urban cool', image: outfit4, matchScore: 85 },
   ];
 
   const toggleOutfitSelection = (id: number) => {
@@ -122,12 +122,15 @@ const Results = () => {
                   `}
                   onClick={() => toggleOutfitSelection(outfit.id)}
                 >
-                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted">
+                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted relative">
                     <img 
                       src={outfit.image} 
                       alt={outfit.name}
                       className="w-full h-full object-cover"
                     />
+                    <div className="absolute top-2 right-2 bg-accent text-accent-foreground px-3 py-1 rounded-full text-sm font-bold shadow-lg">
+                      {outfit.matchScore}%
+                    </div>
                   </div>
                   <h3 className="font-semibold mb-2">{outfit.name}</h3>
                   <p className="text-sm text-muted-foreground mb-2">{outfit.style}</p>
