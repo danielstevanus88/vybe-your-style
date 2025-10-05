@@ -13,6 +13,7 @@ const Results = () => {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [selectedOutfits, setSelectedOutfits] = useState<number[]>([]);
   const [showGenerated, setShowGenerated] = useState(false);
+  const [customClothes, setCustomClothes] = useState<string[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -49,6 +50,27 @@ const Results = () => {
 
   const handleSaveToGallery = () => {
     toast.success("Look saved to your gallery!");
+  };
+
+  const handleCustomClothesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach(file => {
+      if (!file.type.startsWith('image/')) {
+        toast.error("Please upload image files only");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result as string;
+        setCustomClothes(prev => [...prev, result]);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    toast.success("Custom clothing uploaded!");
   };
 
   return (
@@ -91,6 +113,13 @@ const Results = () => {
               </h2>
               <div className="space-y-4">
                 <div className="p-4 rounded-lg bg-background/50">
+                  <p className="text-sm font-semibold text-accent mb-1">Style Match Score</p>
+                  <div className="flex items-center gap-3">
+                    <div className="text-3xl font-bold gradient-text">92%</div>
+                    <p className="text-muted-foreground text-sm">Excellent match with your selected style category</p>
+                  </div>
+                </div>
+                <div className="p-4 rounded-lg bg-background/50">
                   <p className="text-sm font-semibold text-accent mb-1">Overall Vibe</p>
                   <p className="text-muted-foreground">Casual chic with modern elements</p>
                 </div>
@@ -108,38 +137,95 @@ const Results = () => {
 
           {/* Outfit Recommendations */}
           <div className="mb-8">
-            <h2 className="text-3xl font-bold mb-6">Recommended Outfits</h2>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+              <div>
+                <h2 className="text-3xl font-bold mb-2">Recommended Outfits</h2>
+                <p className="text-muted-foreground">Click to select outfits for virtual try-on</p>
+              </div>
+              <label className="cursor-pointer">
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  onChange={handleCustomClothesUpload}
+                  className="hidden"
+                />
+                <Button variant="outline" className="transition-smooth" asChild>
+                  <span>
+                    <ShoppingBag className="w-4 h-4 mr-2" />
+                    Upload Your Own Clothes
+                  </span>
+                </Button>
+              </label>
+            </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {outfitRecommendations.map((outfit) => (
                 <Card 
                   key={outfit.id}
                   className={`
-                    p-4 cursor-pointer transition-smooth
+                    p-4 cursor-pointer transition-smooth relative
                     ${selectedOutfits.includes(outfit.id) 
-                      ? 'ring-2 ring-accent shadow-elegant scale-105' 
-                      : 'hover:shadow-elegant hover:scale-102'
+                      ? 'ring-4 ring-accent shadow-elegant scale-105 bg-accent/5' 
+                      : 'hover:shadow-elegant hover:scale-102 hover:ring-2 hover:ring-accent/50'
                     }
                   `}
                   onClick={() => toggleOutfitSelection(outfit.id)}
                 >
-                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted relative">
+                  {selectedOutfits.includes(outfit.id) && (
+                    <div className="absolute top-2 left-2 bg-accent text-accent-foreground px-3 py-1.5 rounded-full text-xs font-bold shadow-lg flex items-center gap-1.5 z-10">
+                      <Heart className="w-3 h-3 fill-current" />
+                      Selected
+                    </div>
+                  )}
+                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted">
                     <img 
                       src={outfit.image} 
                       alt={outfit.name}
                       className="w-full h-full object-cover"
                     />
-                    <div className="absolute top-2 right-2 bg-accent text-accent-foreground px-3 py-1 rounded-full text-sm font-bold shadow-lg">
-                      {outfit.matchScore}%
-                    </div>
                   </div>
                   <h3 className="font-semibold mb-2">{outfit.name}</h3>
                   <p className="text-sm text-muted-foreground mb-2">{outfit.style}</p>
                   <div className="flex justify-between items-center">
                     <span className="text-accent font-bold">{outfit.price}</span>
-                    <Button variant="ghost" size="sm" className="hover:text-accent">
-                      <ShoppingBag className="w-4 h-4" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-muted-foreground">{outfit.matchScore}% match</span>
+                      <Button variant="ghost" size="sm" className="hover:text-accent">
+                        <ShoppingBag className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
+                </Card>
+              ))}
+              
+              {/* Custom Uploaded Clothes */}
+              {customClothes.map((clothingImg, idx) => (
+                <Card 
+                  key={`custom-${idx}`}
+                  className={`
+                    p-4 cursor-pointer transition-smooth relative
+                    ${selectedOutfits.includes(1000 + idx) 
+                      ? 'ring-4 ring-accent shadow-elegant scale-105 bg-accent/5' 
+                      : 'hover:shadow-elegant hover:scale-102 hover:ring-2 hover:ring-accent/50'
+                    }
+                  `}
+                  onClick={() => toggleOutfitSelection(1000 + idx)}
+                >
+                  {selectedOutfits.includes(1000 + idx) && (
+                    <div className="absolute top-2 left-2 bg-accent text-accent-foreground px-3 py-1.5 rounded-full text-xs font-bold shadow-lg flex items-center gap-1.5 z-10">
+                      <Heart className="w-3 h-3 fill-current" />
+                      Selected
+                    </div>
+                  )}
+                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted">
+                    <img 
+                      src={clothingImg} 
+                      alt="Custom clothing"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <h3 className="font-semibold mb-2">Your Custom Outfit</h3>
+                  <p className="text-sm text-muted-foreground mb-2">Uploaded by you</p>
                 </Card>
               ))}
             </div>
