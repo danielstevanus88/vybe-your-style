@@ -1,30 +1,32 @@
-import { Button } from "@/components/ui/button";
-import { ArrowRight, Sparkles, Wand2, Camera, Heart } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Sparkles, Upload, Search, Shirt, Heart } from "lucide-react";
+import heroImage from "@/assets/hero-fashion.jpg";
 
-const Landing = () => {
+const Index = () => {
   const navigate = useNavigate();
 
   const features = [
     {
-      icon: Camera,
+      icon: Upload,
       title: "Upload Your Look",
-      description: "Simply upload a photo of yourself to get started with AI-powered style analysis"
+      description: "Share a photo of your outfit for instant AI analysis"
     },
     {
-      icon: Sparkles,
-      title: "AI Style Analysis",
-      description: "Get expert fashion feedback tailored to your chosen style category"
+      icon: Search,
+      title: "Select Your Style",
+      description: "Choose from various aesthetics to match your vibe"
     },
     {
-      icon: Wand2,
-      title: "Virtual Try-On",
-      description: "See yourself in recommended outfits from every angle with AI-generated images"
+      icon: Shirt,
+      title: "Get Recommendations",
+      description: "Receive personalized outfit suggestions with shopping links"
     },
     {
       icon: Heart,
-      title: "Save Your Favorites",
-      description: "Build your personal style gallery with your favorite AI-generated looks"
+      title: "Virtual Try-On",
+      description: "See yourself in new outfits from 4 different angles"
     }
   ];
 
@@ -32,100 +34,104 @@ const Landing = () => {
     <div className="min-h-screen bg-background">
       {/* Hero Section */}
       <section className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-accent/10 via-purple-500/5 to-transparent" />
-        
-        <div className="container mx-auto px-4 py-20 md:py-32 relative">
-          <div className="max-w-4xl mx-auto text-center space-y-8">
-            <h1 className="text-6xl md:text-8xl font-bold mb-6 animate-fade-in">
-              <span className="gradient-text">Vybe</span>
+        {/* subtle gradient overlay behind the hero image */}
+        <div className="absolute inset-0 gradient-hero opacity-40 pointer-events-none"></div>
+        <div className="absolute inset-0">
+          <img
+            src={heroImage}
+            alt="Fashion hero"
+            className="w-full h-full object-cover opacity-80 filter blur-sm"
+          />
+        </div>
+
+  <div className="relative container mx-auto px-4 py-24 md:py-32 z-40">
+          {/* pink translucent jumbotron background behind the main hero content */}
+          <div className="absolute inset-x-6 top-12 md:top-20 -z-10 rounded-3xl bg-pink-500/8" style={{ height: 'calc(100% - 3rem)' }} />
+
+          <div className="max-w-3xl mx-auto text-center space-y-8 relative">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-pink-50/40 backdrop-blur-sm border border-pink-200/30">
+              <Sparkles className="w-4 h-4 text-primary-foreground" />
+              <span className="text-sm font-medium text-primary-foreground">AI-Powered Fashion Assistant</span>
+            </div>
+
+            <h1 className="text-5xl md:text-7xl font-bold text-primary-foreground tracking-tight">
+              Discover Your Perfect Style with Vybe
             </h1>
-            
-            <p className="text-2xl md:text-3xl text-muted-foreground font-light max-w-2xl mx-auto">
-              Transform your style with AI-powered fashion recommendations and virtual try-on
+
+            <p className="text-xl text-primary-foreground/90 max-w-2xl mx-auto">
+              Upload your outfit, get instant AI feedback, and see yourself in new looks with virtual try-on technology
             </p>
-            
-            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-8">
+
+            <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
               <Button
+                variant="default"
                 size="lg"
                 onClick={() => navigate('/upload')}
-                className="bg-gradient-to-r from-accent to-purple-600 hover:shadow-elegant transition-smooth text-lg px-8 py-6"
+                className="bg-background/90 text-foreground hover:bg-background shadow-xl"
               >
-                Get Started
-                <ArrowRight className="w-5 h-5 ml-2" />
+                Start Your Style Journey
               </Button>
-              
               <Button
-                size="lg"
                 variant="outline"
+                size="lg"
                 onClick={() => navigate('/saved')}
-                className="text-lg px-8 py-6 transition-smooth"
+                className="border-primary-foreground/30 bg-background/10 backdrop-blur-sm text-primary-foreground hover:bg-background/20"
               >
-                View Saved Looks
+                <Heart className="w-4 h-4" /> View Saved Looks
               </Button>
             </div>
           </div>
         </div>
+        {/* pink foreground layer in front of the hero (transparent) */}
+        <div aria-hidden className="absolute inset-0 pointer-events-none z-30" style={{ background: 'linear-gradient(90deg, rgba(124,58,237,0.48) 0%, rgba(168,85,247,0.42) 40%, rgba(236,72,153,0.48) 100%)' }} />
       </section>
 
       {/* Features Section */}
-      <section className="py-20 md:py-32 bg-muted/20">
-        <div className="container mx-auto px-4">
-          <div className="max-w-6xl mx-auto">
+      <section className="py-24 bg-background">
+          <div className="container mx-auto px-4 max-w-6xl">
             <div className="text-center mb-16">
-              <h2 className="text-4xl md:text-5xl font-bold mb-4">
-                How It Works
-              </h2>
-              <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-                Four simple steps to discover your perfect style
-              </p>
-            </div>
-
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-              {features.map((feature, idx) => (
-                <div
-                  key={idx}
-                  className="p-8 rounded-2xl bg-card border border-border shadow-soft transition-smooth hover:shadow-elegant hover:scale-105 hover:border-accent/50"
-                >
-                  <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-accent/20 to-purple-500/20 flex items-center justify-center mb-6">
-                    <feature.icon className="w-8 h-8 text-accent" />
-                  </div>
-                  
-                  <h3 className="text-xl font-semibold mb-3">{feature.title}</h3>
-                  <p className="text-muted-foreground leading-relaxed">
-                    {feature.description}
-                  </p>
-                </div>
-              ))}
-            </div>
+            <h2 className="text-4xl md:text-5xl font-bold mb-4">How Vybe Works</h2>
+            <p className="text-muted-foreground text-lg">
+              Four simple steps to elevate your style game
+            </p>
           </div>
+            <div className="rounded-2xl p-6 bg-pink-50/30 border border-pink-200/20">
+              <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {features.map((feature, index) => (
+                  <Card key={index} className="p-6 hover:shadow-lg transition-smooth border-2 hover:border-pink-300/50">
+                    <div className="w-12 h-12 rounded-full bg-pink-100 flex items-center justify-center mb-4 shadow-sm">
+                      <feature.icon className="w-6 h-6 text-pink-600" />
+                    </div>
+                    <h3 className="text-xl font-semibold mb-2">{feature.title}</h3>
+                    <p className="text-muted-foreground text-sm">{feature.description}</p>
+                  </Card>
+                ))}
+              </div>
+            </div>
         </div>
       </section>
 
       {/* CTA Section */}
-      <section className="py-20 md:py-32">
-        <div className="container mx-auto px-4">
-          <div className="max-w-4xl mx-auto text-center space-y-8 p-12 rounded-3xl bg-gradient-to-br from-accent/5 to-purple-500/5 border border-accent/20">
-            <h2 className="text-4xl md:text-5xl font-bold">
-              Ready to Transform Your Style?
-            </h2>
-            
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Join thousands discovering their perfect look with AI-powered fashion recommendations
-            </p>
-            
-            <Button
-              size="lg"
-              onClick={() => navigate('/upload')}
-              className="bg-gradient-to-r from-accent to-purple-600 hover:shadow-elegant transition-smooth text-lg px-8 py-6"
-            >
-              <Sparkles className="w-5 h-5 mr-2" />
-              Start Your Style Journey
-            </Button>
-          </div>
+      <section className="py-24 gradient-hero">
+        <div className="container mx-auto px-4 max-w-4xl text-center">
+          <h2 className="text-4xl md:text-5xl font-bold text-foreground mb-6 drop-shadow-lg">
+            Ready to Transform Your Wardrobe?
+          </h2>
+          <p className="text-xl text-foreground/85 mb-8 drop-shadow-sm">
+            Join thousands of style-conscious users discovering their perfect look
+          </p>
+          <Button
+            variant="default"
+            size="lg"
+            onClick={() => navigate('/upload')}
+            className="bg-background/90 text-foreground hover:bg-background shadow-2xl"
+          >
+            Get Started Now
+          </Button>
         </div>
       </section>
     </div>
   );
 };
 
-export default Landing;
+export default Index;

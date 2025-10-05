@@ -4,10 +4,25 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ChevronLeft, Heart, Sparkles, ShoppingBag, RefreshCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { putImage } from "@/lib/idb";
 import outfit1 from "@/assets/outfit-1-denim-tee.jpg";
 import outfit2 from "@/assets/outfit-2-blazer.jpg";
 import outfit3 from "@/assets/outfit-3-dress.jpg";
 import outfit4 from "@/assets/outfit-4-streetwear.jpg";
+
+// helper: convert dataURL (base64) to File
+function dataURLtoFile(dataurl: string, filename: string) {
+  const arr = dataurl.split(',');
+  const mimeMatch = arr[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8 = new Uint8Array(n);
+  while (n--) {
+    u8[n] = bstr.charCodeAt(n);
+  }
+  return new File([u8], filename, { type: mime });
+}
 
 const Results = () => {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
@@ -15,7 +30,9 @@ const Results = () => {
   const [showGenerated, setShowGenerated] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [customClothes, setCustomClothes] = useState<string[]>([]);
+  const [generatedImages, setGeneratedImages] = useState<Array<{ view: string; src?: string; error?: string }>>([]); // add state to hold returned images
   const virtualTryOnRef = useRef<HTMLDivElement>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -27,13 +44,132 @@ const Results = () => {
     setUploadedImage(image);
   }, [navigate]);
 
-  // Mock outfit recommendations
-  const outfitRecommendations = [
-    { id: 1, name: 'Classic Denim & White Tee', price: '$89', style: 'Timeless casual', image: outfit1, matchScore: 94 },
-    { id: 2, name: 'Blazer & Trousers Combo', price: '$199', style: 'Professional chic', image: outfit2, matchScore: 88 },
-    { id: 3, name: 'Flowy Summer Dress', price: '$129', style: 'Effortless elegance', image: outfit3, matchScore: 91 },
-    { id: 4, name: 'Streetwear Hoodie Set', price: '$149', style: 'Urban cool', image: outfit4, matchScore: 85 },
-  ];
+  // Fetch AI style insights (feedback) when we have an uploaded image
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+
+  // reusable fetch function so we can retry from UI
+  const fetchFeedback = async (signal?: AbortSignal) => {
+    if (!uploadedImage) return;
+    setFeedbackLoading(true);
+    setFeedbackError(null);
+    try {
+      const fd = new FormData();
+      fd.append('image', dataURLtoFile(uploadedImage, 'uploaded.png'));
+      // Determine style: prefer selected outfit, then stored category from Categories page, then default
+      let styleKey = 'smart_casual';
+      const storedCategory = typeof window !== 'undefined' ? localStorage.getItem('selectedCategory') : null;
+      if (selectedOutfits.length) {
+        const sel = outfitRecommendations.find(o => o.id === selectedOutfits[0]);
+        styleKey = (sel?.style || sel?.category || styleKey).toString().trim() || styleKey;
+      } else if (storedCategory) {
+        styleKey = storedCategory.toString().trim() || styleKey;
+      }
+      console.log('[client] /api/feedback sending style:', styleKey);
+      fd.append('style', styleKey);
+
+      const controller = new AbortController();
+      if (signal) signal.addEventListener('abort', () => controller.abort());
+
+      const res = await fetch('http://localhost:5001/api/feedback', { method: 'POST', body: fd, signal: controller.signal });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error('Feedback request failed', res.status, text);
+        setFeedbackError(text || `Server returned ${res.status}`);
+        setAiFeedback(null);
+        return;
+      }
+      const json = await res.json();
+      // expected: { overall_score, vibe, tips, tags }
+      setAiFeedback(json);
+      setFeedbackError(null);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        console.warn('Feedback request aborted');
+        return;
+      }
+      console.error('Failed to fetch feedback', e);
+      setFeedbackError(e?.message || 'Failed to fetch feedback');
+      setAiFeedback(null);
+    } finally {
+      setFeedbackLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!uploadedImage) return;
+    const ac = new AbortController();
+    fetchFeedback(ac.signal);
+    return () => ac.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadedImage]);
+
+  const [aiFeedback, setAiFeedback] = useState<any>(null);
+  const [outfitRecommendations, setOutfitRecommendations] = useState<any[]>([]);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+
+  // Fetch AI-generated outfit recommendations
+  const fetchRecommendations = async (signal?: AbortSignal, seed?: string) => {
+    if (!uploadedImage) return;
+    setRecommendationsLoading(true);
+    setRecommendationsError(null);
+    try {
+  const fd = new FormData();
+      fd.append('image', dataURLtoFile(uploadedImage, 'uploaded.png'));
+      // Derive the vibe: prefer selected outfit, then stored category from Categories page, then default
+      let vibe = 'casual';
+      const storedCategoryForVibe = typeof window !== 'undefined' ? localStorage.getItem('selectedCategory') : null;
+      if (selectedOutfits.length) {
+        const selected = outfitRecommendations.find(o => o.id === selectedOutfits[0]);
+        if (selected) {
+          vibe = (selected.style || selected.category || vibe).toString().trim() || vibe;
+        }
+      } else if (storedCategoryForVibe) {
+        vibe = storedCategoryForVibe.toString().trim() || vibe;
+      }
+      console.log('[client] /api/recommendations sending vibe:', vibe);
+      fd.append('vibe', vibe);
+  // Include a seed to encourage different recommendations on repeated requests
+  if (seed) fd.append('seed', seed);
+
+      const controller = new AbortController();
+      if (signal) signal.addEventListener('abort', () => controller.abort());
+
+      const res = await fetch('http://localhost:5001/api/recommendations', { method: 'POST', body: fd, signal: controller.signal });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error('Recommendations request failed', res.status, text);
+        setRecommendationsError(text || `Server returned ${res.status}`);
+        return;
+      }
+      const json = await res.json();
+      // expected: { recommendations: [{ id, name, category, style, price, matchScore, searchQuery, shopLink, description }] }
+      console.log('Received recommendations:', json.recommendations);
+      json.recommendations?.forEach((rec: any) => {
+        console.log(`${rec.name}: imageUrl = ${rec.imageUrl}`);
+      });
+      setOutfitRecommendations(json.recommendations || []);
+      setRecommendationsError(null);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        console.warn('Recommendations request aborted');
+        return;
+      }
+      console.error('Failed to fetch recommendations', e);
+      setRecommendationsError(e?.message || 'Failed to fetch recommendations');
+    } finally {
+      setRecommendationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!uploadedImage) return;
+    const ac = new AbortController();
+    fetchRecommendations(ac.signal);
+    return () => ac.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadedImage]);
 
   const toggleOutfitSelection = (id: number) => {
     setSelectedOutfits(prev =>
@@ -46,35 +182,134 @@ const Results = () => {
       toast.error("Please select at least one outfit");
       return;
     }
-    
+
     setIsGenerating(true);
     toast.info("AI is generating your virtual try-on images...");
-    
-    // Simulate AI generation (replace with actual API call)
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    setIsGenerating(false);
-    setShowGenerated(true);
-    toast.success("Virtual try-on complete!");
-    
-    // Auto-scroll to the generated section
-    setTimeout(() => {
-      virtualTryOnRef.current?.scrollIntoView({ 
-        behavior: 'smooth', 
-        block: 'start' 
+
+    try {
+      const fd = new FormData();
+
+      // --- 1) user's uploaded image (from state or localStorage)
+      const userDataUrl = uploadedImage ?? localStorage.getItem('uploadedImage');
+      if (!userDataUrl) {
+        throw new Error('No uploaded image found');
+      }
+      fd.append('images', dataURLtoFile(userDataUrl, 'user-photo.png'));
+
+      // --- 2) Build text description of selected outfits (AI recommendations don't have images)
+      const selectedItems = selectedOutfits
+        .map(id => outfitRecommendations.find(o => o.id === id))
+        .filter(Boolean);
+
+      const outfitDescriptions = selectedItems
+        .map(item => `${item.name} (${item.category}) - ${item.description || item.style}`)
+        .join('; ');
+
+      // --- 3) prompt: describe how to dress the person with the selected items
+      const prompt = `Transform the person in the uploaded image by dressing them in the following outfit items: ${outfitDescriptions}.
+Create a realistic virtual try-on showing how they would look wearing these items.
+Preserve their pose, facial features, and scene lighting.
+Generate a high-quality, photorealistic result showing the complete outfit.`;
+      fd.append('prompt', prompt);
+
+      // --- 4) POST to server
+      // If your server is running on port 5001 locally (see server.js), call that URL.
+      const res = await fetch('http://localhost:5001/api/generate', {
+        method: 'POST',
+        body: fd,
       });
-    }, 100);
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Server error ${res.status}: ${text}`);
+      }
+
+      const json = await res.json();
+      // server returns { results: [ { view, mimeType, data } ] }
+      const results: any[] = json.results || [];
+
+      // Helper to convert server result into a src or error
+      const makeEntry = (r: any, fallbackView: string) => {
+        if (!r) return { view: fallbackView, error: 'No image available' };
+        if (r.data && r.mimeType) return { view: fallbackView, src: `data:${r.mimeType};base64,${r.data}` };
+        return { view: fallbackView, error: r.error || 'Generation failed' };
+      };
+
+      // Fill two explicit slots: Front View and Back View.
+      const frontEntry = makeEntry(results[0], 'Front View');
+      // If server returned a second distinct view use it, otherwise duplicate the first as a graceful fallback
+      const backEntry = results[1] ? makeEntry(results[1], 'Back View') : makeEntry(results[0], 'Back View');
+
+      setGeneratedImages([frontEntry, backEntry]);
+      setShowGenerated(true);
+      toast.success("Virtual try-on complete!");
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || 'Generation failed');
+    } finally {
+      setIsGenerating(false);
+      // scroll to generated area if needed
+      setTimeout(() => {
+        virtualTryOnRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
   };
 
-  const handleSaveToGallery = () => {
-    toast.success("Look saved to your gallery!");
+  const handleSaveToGallery = async () => {
+    try {
+      // Must have at least one generated image with a data src to save
+      const hasAnySrc = generatedImages.some((g) => !!g.src);
+      if (!hasAnySrc) {
+        toast.error('No generated images available to save. Please generate front/back views first.');
+        return;
+      }
+
+      const existingRaw = localStorage.getItem('vybe_saved_looks');
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const id = Date.now();
+      const name = `Saved Look ${new Date(id).toLocaleString()}`;
+
+      // Normalize generatedImages into explicit front/back fields
+      const front = generatedImages[0] || { view: 'Front View', src: undefined };
+      const back = generatedImages[1] || generatedImages[0] || { view: 'Back View', src: undefined };
+
+      // store large image blobs in IndexedDB and save keys in metadata
+      const frontKey = `look_${id}_front`;
+      const backKey = `look_${id}_back`;
+
+      const metaEntry: any = {
+        id,
+        name,
+        date: new Date(id).toISOString().slice(0,10),
+        outfits: generatedImages.length,
+        front: { key: frontKey, view: front.view || 'Front View' },
+        back: { key: backKey, view: back.view || 'Back View' },
+      };
+
+      // First store actual image blobs into IndexedDB. If this fails, do not persist metadata.
+      try {
+        if (front.src) await putImage(frontKey, front.src);
+        if (back.src) await putImage(backKey, back.src);
+      } catch (e) {
+        console.error('Failed to store images in IndexedDB, aborting save', e);
+        toast.error('Failed to store images locally. Save aborted.');
+        return;
+      }
+
+      // persist metadata only after images are safely stored
+      existing.unshift(metaEntry);
+      localStorage.setItem('vybe_saved_looks', JSON.stringify(existing));
+      toast.success('Look saved to your gallery!');
+    } catch (e: any) {
+      console.error('Failed to save look', e);
+      toast.error(e?.message || 'Failed to save look');
+    }
   };
 
   const handleCustomClothesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-
-    Array.from(files).forEach(file => {
+    Array.from(files).forEach((file, idx) => {
       if (!file.type.startsWith('image/')) {
         toast.error("Please upload image files only");
         return;
@@ -83,7 +318,22 @@ const Results = () => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const result = event.target?.result as string;
+        // keep data URI in customClothes state (if used elsewhere)
         setCustomClothes(prev => [...prev, result]);
+
+        // Create a lightweight outfit object and prepend to recommendations so it appears like other outfits
+        const customId = Date.now() + Math.floor(Math.random() * 1000) + idx;
+        const customOutfit: any = {
+          id: customId,
+          name: file.name || `Custom ${customId}`,
+          category: 'custom',
+          style: 'Custom',
+          description: '',
+          imageUrl: result,
+          isCustom: true,
+          matchScore: 0,
+        };
+        setOutfitRecommendations(prev => [customOutfit, ...(prev || [])]);
       };
       reader.readAsDataURL(file);
     });
@@ -115,9 +365,9 @@ const Results = () => {
             <Card className="p-6 shadow-elegant">
               <h2 className="text-2xl font-semibold mb-4">Your Uploaded Look</h2>
               {uploadedImage && (
-                <img 
-                  src={uploadedImage} 
-                  alt="Original" 
+                <img
+                  src={uploadedImage}
+                  alt="Original"
                   className="w-full rounded-xl object-contain max-h-96"
                 />
               )}
@@ -130,25 +380,73 @@ const Results = () => {
                 AI Style Insights
               </h2>
               <div className="space-y-4">
-                <div className="p-4 rounded-lg bg-background/50">
-                  <p className="text-sm font-semibold text-accent mb-1">Style Match Score</p>
-                  <div className="flex items-center gap-3">
-                    <div className="text-3xl font-bold gradient-text">92%</div>
-                    <p className="text-muted-foreground text-sm">Excellent match with your selected style category</p>
+                {feedbackLoading ? (
+                  <div className="p-4 rounded-lg bg-background/50 flex items-center gap-3">
+                    <Loader2 className="w-6 h-6 animate-spin text-accent" />
+                    <div className="text-sm text-muted-foreground">Analysis loading...</div>
                   </div>
-                </div>
-                <div className="p-4 rounded-lg bg-background/50">
-                  <p className="text-sm font-semibold text-accent mb-1">Overall Vibe</p>
-                  <p className="text-muted-foreground">Casual chic with modern elements</p>
-                </div>
-                <div className="p-4 rounded-lg bg-background/50">
-                  <p className="text-sm font-semibold text-accent mb-1">Strengths</p>
-                  <p className="text-muted-foreground">Great color coordination and fit</p>
-                </div>
-                <div className="p-4 rounded-lg bg-background/50">
-                  <p className="text-sm font-semibold text-accent mb-1">Recommendations</p>
-                  <p className="text-muted-foreground">Try adding statement accessories to elevate the look</p>
-                </div>
+                ) : aiFeedback ? (
+                  <>
+                    <div className="p-4 rounded-lg bg-background/50">
+                      <p className="text-sm font-semibold text-accent mb-1">Style Match Score</p>
+                      <div className="flex items-center gap-3">
+                        <div className="text-3xl font-bold gradient-text">{Math.round((aiFeedback.overall_score ?? 0) * 100)}%</div>
+                        <p className="text-muted-foreground text-sm">{aiFeedback.vibe}</p>
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-lg bg-background/50">
+                      <p className="text-sm font-semibold text-accent mb-1">Strengths & Recommendations</p>
+                      <div className="space-y-2">
+                        {(aiFeedback.tips || []).map((t: any, i: number) => (
+                          <div key={i}>
+                            <div className="text-sm font-medium">{t.label}</div>
+                            <div className="text-sm text-muted-foreground">{t.text}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Component breakdown + detected garments + action plan */}
+                    <div className="p-4 rounded-lg bg-background/50">
+                      <p className="text-sm font-semibold text-accent mb-2">Detailed Breakdown</p>
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        {aiFeedback.components ? (
+                          Object.entries(aiFeedback.components).map(([k, v]: any) => (
+                            <div key={k} className="p-2 bg-muted rounded">
+                              <div className="text-xs uppercase text-muted-foreground">{k.replace('_', ' ')}</div>
+                              <div className="font-semibold">{Math.round((v ?? 0) * 100)}%</div>
+                            </div>
+                          ))
+                        ) : null}
+                      </div>
+
+                      {/* action_plan and detected_garments removed per user request */}
+                    </div>
+
+                    {aiFeedback.tags?.length ? (
+                      <div className="p-4 rounded-lg bg-background/50">
+                        <p className="text-sm font-semibold text-accent mb-1">Detected features</p>
+                        <div className="flex flex-wrap gap-2">
+                          {aiFeedback.tags.map((tag: string, i: number) => (
+                            <span key={i} className="px-2 py-1 text-xs rounded-full bg-zinc-100 border">{tag}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                ) : feedbackError ? (
+                  <div className="p-4 rounded-lg bg-background/50">
+                    <p className="text-sm text-destructive mb-2">Failed to load analysis: {feedbackError}</p>
+                    <div className="flex gap-2">
+                      <Button onClick={() => fetchFeedback()} variant="outline">Retry</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-lg bg-background/50">
+                    <p className="text-sm text-muted-foreground">Analysis loading...</p>
+                  </div>
+                )}
               </div>
             </Card>
           </div>
@@ -157,96 +455,136 @@ const Results = () => {
           <div className="mb-8">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
               <div>
-                <h2 className="text-3xl font-bold mb-2">Recommended Outfits</h2>
-                <p className="text-muted-foreground">Click to select outfits for virtual try-on</p>
+                <h2 className="text-3xl font-bold mb-2">AI-Recommended Outfits</h2>
+                <p className="text-muted-foreground">Personalized recommendations based on your style</p>
               </div>
-              <label className="cursor-pointer">
+              <>
                 <input
+                  ref={uploadInputRef}
                   type="file"
                   multiple
                   accept="image/*"
                   onChange={handleCustomClothesUpload}
                   className="hidden"
                 />
-                <Button variant="outline" className="transition-smooth" asChild>
-                  <span>
-                    <ShoppingBag className="w-4 h-4 mr-2" />
-                    Upload Your Own Clothes
-                  </span>
+                <Button
+                  variant="outline"
+                  className="transition-smooth"
+                  onClick={() => uploadInputRef.current?.click()}
+                >
+                  <ShoppingBag className="w-4 h-4 mr-2" />
+                  Upload Your Own Clothes
                 </Button>
-              </label>
+              </>
             </div>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+
+            {recommendationsLoading ? (
+              <div className="flex items-center justify-center p-12">
+                <Loader2 className="w-8 h-8 animate-spin text-accent" />
+                <span className="ml-3 text-muted-foreground">AI is analyzing your style...</span>
+              </div>
+            ) : recommendationsError ? (
+              <div className="p-6 rounded-lg bg-muted">
+                <p className="text-sm text-destructive mb-2">Failed to load recommendations: {recommendationsError}</p>
+                <Button onClick={() => fetchRecommendations()} variant="outline">Retry</Button>
+              </div>
+            ) : (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {outfitRecommendations.map((outfit) => (
-                <Card 
+                <Card
                   key={outfit.id}
                   className={`
-                    p-4 cursor-pointer transition-smooth relative
-                    ${selectedOutfits.includes(outfit.id) 
-                      ? 'ring-4 ring-accent shadow-elegant scale-105 bg-accent/5' 
-                      : 'hover:shadow-elegant hover:scale-102 hover:ring-2 hover:ring-accent/50'
-                    }
+                    p-4 transition-smooth relative
+                    hover:shadow-elegant hover:scale-102
                   `}
-                  onClick={() => toggleOutfitSelection(outfit.id)}
                 >
-                  {selectedOutfits.includes(outfit.id) && (
-                    <div className="absolute top-2 left-2 bg-accent text-accent-foreground px-3 py-1.5 rounded-full text-xs font-bold shadow-lg flex items-center gap-1.5 z-10">
-                      <Heart className="w-3 h-3 fill-current" />
-                      Selected
-                    </div>
-                  )}
-                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted">
-                    <img 
-                      src={outfit.image} 
-                      alt={outfit.name}
-                      className="w-full h-full object-cover"
-                    />
+                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center">
+                    {outfit.imageUrl ? (
+                      <img
+                        src={outfit.imageUrl}
+                        alt={outfit.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          // Fallback to emoji if image fails to load
+                          e.currentTarget.style.display = 'none';
+                          e.currentTarget.parentElement.innerHTML = `<div class="text-6xl">${
+                            outfit.category === 'shirt' ? '👕' :
+                            outfit.category === 'pants' ? '👖' :
+                            outfit.category === 'dress' ? '👗' :
+                            outfit.category === 'shoes' ? '👟' :
+                            outfit.category === 'outerwear' ? '🧥' :
+                            outfit.category === 'accessory' ? '👜' : '👔'
+                          }</div>`;
+                        }}
+                      />
+                    ) : (
+                      <div className="text-6xl">
+                        {outfit.category === 'shirt' && '👕'}
+                        {outfit.category === 'pants' && '👖'}
+                        {outfit.category === 'dress' && '👗'}
+                        {outfit.category === 'shoes' && '👟'}
+                        {outfit.category === 'outerwear' && '🧥'}
+                        {outfit.category === 'accessory' && '👜'}
+                        {!['shirt', 'pants', 'dress', 'shoes', 'outerwear', 'accessory'].includes(outfit.category) && '👔'}
+                      </div>
+                    )}
                   </div>
                   <h3 className="font-semibold mb-2">{outfit.name}</h3>
                   <p className="text-sm text-muted-foreground mb-2">{outfit.style}</p>
-                  <div className="flex justify-between items-center">
-                    <span className="text-accent font-bold">{outfit.price}</span>
-                    <div className="flex items-center gap-1">
-                      <span className="text-xs text-muted-foreground">{outfit.matchScore}% match</span>
-                      <Button variant="ghost" size="sm" className="hover:text-accent">
-                        <ShoppingBag className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-              
-              {/* Custom Uploaded Clothes */}
-              {customClothes.map((clothingImg, idx) => (
-                <Card 
-                  key={`custom-${idx}`}
-                  className={`
-                    p-4 cursor-pointer transition-smooth relative
-                    ${selectedOutfits.includes(1000 + idx) 
-                      ? 'ring-4 ring-accent shadow-elegant scale-105 bg-accent/5' 
-                      : 'hover:shadow-elegant hover:scale-102 hover:ring-2 hover:ring-accent/50'
-                    }
-                  `}
-                  onClick={() => toggleOutfitSelection(1000 + idx)}
-                >
-                  {selectedOutfits.includes(1000 + idx) && (
-                    <div className="absolute top-2 left-2 bg-accent text-accent-foreground px-3 py-1.5 rounded-full text-xs font-bold shadow-lg flex items-center gap-1.5 z-10">
-                      <Heart className="w-3 h-3 fill-current" />
-                      Selected
-                    </div>
+                  {outfit.description && (
+                    <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{outfit.description}</p>
                   )}
-                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted">
-                    <img 
-                      src={clothingImg} 
-                      alt="Custom clothing"
-                      className="w-full h-full object-cover"
-                    />
+                  <div className="flex justify-between items-center mb-3">
+                    {!outfit.isCustom ? (
+                      <div className="flex flex-col">
+                        <span className="text-accent font-bold">{outfit.price}</span>
+                        <span className="text-[10px] text-muted-foreground/60">Est. price</span>
+                      </div>
+                    ) : (
+                      <div />
+                    )}
+                    <span className="text-xs text-muted-foreground">{outfit.matchScore}% match</span>
                   </div>
-                  <h3 className="font-semibold mb-2">Your Custom Outfit</h3>
-                  <p className="text-sm text-muted-foreground mb-2">Uploaded by you</p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 transition-smooth"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleOutfitSelection(outfit.id);
+                      }}
+                    >
+                      {selectedOutfits.includes(outfit.id) ? (
+                        <><Heart className="w-3 h-3 mr-1 fill-current" />Selected</>
+                      ) : (
+                        <>Select</>
+                      )}
+                    </Button>
+                    {!outfit.isCustom ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="flex-1 bg-accent transition-smooth"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (outfit.shopLink) window.open(outfit.shopLink, '_blank');
+                        }}
+                      >
+                        <ShoppingBag className="w-3 h-3 mr-1" />
+                        Shop
+                      </Button>
+                    ) : (
+                      <Button variant="outline" size="sm" className="flex-1" onClick={(e) => { e.stopPropagation(); toggleOutfitSelection(outfit.id); }}>
+                        Select
+                      </Button>
+                    )}
+                  </div>
                 </Card>
               ))}
             </div>
+            )}
+
           </div>
 
           {/* Action Buttons */}
@@ -268,7 +606,11 @@ const Results = () => {
                 </>
               )}
             </Button>
-            <Button variant="outline" className="transition-smooth">
+            <Button variant="outline" className="transition-smooth" onClick={() => {
+              const seed = Math.random().toString(36).slice(2, 9);
+              setRecommendationsLoading(true);
+              fetchRecommendations(undefined, seed).finally(() => setRecommendationsLoading(false));
+            }}>
               <RefreshCw className="w-4 h-4 mr-2" />
               Get More Recommendations
             </Button>
@@ -299,15 +641,29 @@ const Results = () => {
           {showGenerated && !isGenerating && (
             <div ref={virtualTryOnRef} className="mt-12 scroll-mt-8">
               <h2 className="text-3xl font-bold mb-6">Your Virtual Try-On</h2>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                {['Front View', 'Back View', 'Left Side', 'Right Side'].map((view, idx) => (
-                  <Card key={idx} className="p-4 shadow-elegant">
-                    <div className="aspect-square bg-muted rounded-lg mb-4 flex items-center justify-center">
-                      <span className="text-6xl">📸</span>
-                    </div>
-                    <p className="text-center font-semibold">{view}</p>
-                  </Card>
-                ))}
+              {/* two equal columns: front and back each take 50% width on md+ */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Always show two slots: Front View and Back View */}
+                {['Front View', 'Back View'].map((slot) => {
+                  const item = generatedImages.find((g) => (g.view || '').toLowerCase() === slot.toLowerCase());
+                  return (
+                    <Card key={slot} className="p-4 shadow-elegant h-full flex flex-col">
+                      {/* portrait 9:16 ratio for each view */}
+                      <div className="w-full aspect-[9/16] bg-muted rounded-lg mb-4 flex items-center justify-center overflow-hidden relative">
+                        {item ? (
+                          item.src ? (
+                            <img src={item.src} alt={slot} className="absolute inset-0 w-full h-full object-cover" />
+                          ) : (
+                            <div className="text-sm text-muted-foreground p-4">{item.error || 'Generation failed'}</div>
+                          )
+                        ) : (
+                          <div className="text-sm text-muted-foreground p-4">{isGenerating ? 'Generating...' : 'No image available'}</div>
+                        )}
+                      </div>
+                      <p className="text-center font-semibold">{slot}</p>
+                    </Card>
+                  );
+                })}
               </div>
               <div className="flex justify-center mt-8 gap-4">
                 <Button
@@ -317,7 +673,7 @@ const Results = () => {
                   <Heart className="w-4 h-4 mr-2" />
                   Save to Gallery
                 </Button>
-                <Button 
+                <Button
                   variant="outline"
                   onClick={() => navigate('/saved')}
                   className="transition-smooth"
