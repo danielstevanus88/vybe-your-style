@@ -230,6 +230,7 @@ app.post('/api/recommendations', upload.single('image'), async (req, res) => {
 You are a professional fashion stylist and personal shopper.
 Analyze the uploaded image of a person and recommend 4 complete outfit items that match their style and the target vibe: "${vibe}".
 
+IMPORTANT! Match the vibe: "${vibe}"
 Return ONE valid JSON object only (no commentary, no markdown).
 Schema:
 {
@@ -280,12 +281,99 @@ Requirements:
       return res.status(500).json({ error: 'Could not parse recommendations JSON', raw: text.slice(0, 1000) });
     }
 
-    // Add Google Shopping links to each recommendation
+    // Fetch actual product images from Google Shopping for each recommendation
     if (parsed.recommendations && Array.isArray(parsed.recommendations)) {
-      parsed.recommendations = parsed.recommendations.map(rec => ({
-        ...rec,
-        shopLink: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(rec.searchQuery || rec.name)}`
-      }));
+      const imagePromises = parsed.recommendations.map(async (rec) => {
+        try {
+          // Priority 1: SerpAPI for real Google Shopping product images
+          const serpApiKey = process.env.SERPAPI_KEY;
+          if (serpApiKey) {
+            try {
+              const serpUrl = `https://serpapi.com/search.json?engine=google_shopping&q=${encodeURIComponent(rec.searchQuery || rec.name)}&api_key=${serpApiKey}&num=1`;
+              const serpResponse = await fetch(serpUrl);
+              const serpData = await serpResponse.json();
+
+              if (serpData.shopping_results && serpData.shopping_results.length > 0 && serpData.shopping_results[0].thumbnail) {
+                console.log(`✅ SerpAPI: ${rec.name}`);
+                return serpData.shopping_results[0].thumbnail;
+              }
+            } catch (serpErr) {
+              console.log(`⚠️ SerpAPI failed for ${rec.name}:`, serpErr.message);
+            }
+          }
+
+          // Priority 2: Google Custom Search API with better parameters
+          const searchApiKey = process.env.GOOGLE_SEARCH_API_KEY;
+          const searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+
+          if (searchApiKey && searchEngineId) {
+            try {
+              // Add 'shopping' to the query to get product images
+              const productQuery = `${rec.searchQuery || rec.name} shopping product`;
+              const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${searchApiKey}&cx=${searchEngineId}&searchType=image&q=${encodeURIComponent(productQuery)}&num=1&imgSize=medium&safe=active`;
+              const response = await fetch(searchUrl);
+              const data = await response.json();
+
+              if (data.items && data.items.length > 0) {
+                console.log(`✅ Google CSE: ${rec.name}`);
+                return data.items[0].link;
+              }
+            } catch (gErr) {
+              console.log(`⚠️ Google CSE failed for ${rec.name}:`, gErr.message);
+            }
+          }
+
+          // Priority 3: Pexels API with better search terms
+          try {
+            const pexelsKey = '563492ad6f91700001000001c9bbef8e9d7a41c98f1bc84a38e27c9f';
+            const pexelsQuery = `${rec.name} ${rec.category}`;
+            const pexelsUrl = `https://api.pexels.com/v1/search?query=${encodeURIComponent(pexelsQuery)}&per_page=1`;
+
+            const pexelsResponse = await fetch(pexelsUrl, {
+              headers: { 'Authorization': pexelsKey }
+            });
+
+            if (pexelsResponse.ok) {
+              const pexelsData = await pexelsResponse.json();
+              if (pexelsData.photos && pexelsData.photos.length > 0) {
+                console.log(`✅ Pexels: ${rec.name}`);
+                return pexelsData.photos[0].src.large;
+              }
+            }
+          } catch (pexErr) {
+            console.log(`⚠️ Pexels failed for ${rec.name}:`, pexErr.message);
+          }
+
+          // Priority 4: Reliable Unsplash direct URLs (not random)
+          const categoryImages = {
+            shirt: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=400&h=400&fit=crop',
+            pants: 'https://images.unsplash.com/photo-1473966968600-fa801b869a1a?w=400&h=400&fit=crop',
+            dress: 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=400&h=400&fit=crop',
+            shoes: 'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=400&h=400&fit=crop',
+            outerwear: 'https://images.unsplash.com/photo-1551028719-00167b16eac5?w=400&h=400&fit=crop',
+            accessory: 'https://images.unsplash.com/photo-1590874103328-eac38a683ce7?w=400&h=400&fit=crop'
+          };
+
+          const fallbackUrl = categoryImages[rec.category] || 'https://images.unsplash.com/photo-1445205170230-053b83016050?w=400&h=400&fit=crop';
+          console.log(`⚠️ Using Unsplash fallback: ${rec.name}`);
+          return fallbackUrl;
+        } catch (err) {
+          console.error(`❌ All methods failed for ${rec.name}:`, err.message);
+          // Final fallback: Placeholder.co
+          const colors = { shirt: '3B82F6', pants: '6366F1', dress: 'EC4899', shoes: '8B5CF6', outerwear: '14B8A6', accessory: 'F59E0B' };
+          return `https://via.placeholder.com/400/${colors[rec.category] || '6B7280'}/FFFFFF?text=${encodeURIComponent(rec.category)}`;
+        }
+      });
+
+      const fetchedImages = await Promise.all(imagePromises);
+
+      parsed.recommendations = parsed.recommendations.map((rec, idx) => {
+        return {
+          ...rec,
+          shopLink: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(rec.searchQuery || rec.name)}`,
+          imageUrl: fetchedImages[idx]
+        };
+      });
     }
 
     return res.json(parsed);

@@ -123,6 +123,10 @@ const Results = () => {
       }
       const json = await res.json();
       // expected: { recommendations: [{ id, name, category, style, price, matchScore, searchQuery, shopLink, description }] }
+      console.log('Received recommendations:', json.recommendations);
+      json.recommendations?.forEach((rec: any) => {
+        console.log(`${rec.name}: imageUrl = ${rec.imageUrl}`);
+      });
       setOutfitRecommendations(json.recommendations || []);
       setRecommendationsError(null);
     } catch (e: any) {
@@ -426,15 +430,35 @@ Generate a high-quality, photorealistic result showing the complete outfit.`;
                   `}
                 >
                   <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center">
-                    <div className="text-6xl">
-                      {outfit.category === 'shirt' && '👕'}
-                      {outfit.category === 'pants' && '👖'}
-                      {outfit.category === 'dress' && '👗'}
-                      {outfit.category === 'shoes' && '👟'}
-                      {outfit.category === 'outerwear' && '🧥'}
-                      {outfit.category === 'accessory' && '👜'}
-                      {!['shirt', 'pants', 'dress', 'shoes', 'outerwear', 'accessory'].includes(outfit.category) && '👔'}
-                    </div>
+                    {outfit.imageUrl ? (
+                      <img
+                        src={outfit.imageUrl}
+                        alt={outfit.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          // Fallback to emoji if image fails to load
+                          e.currentTarget.style.display = 'none';
+                          e.currentTarget.parentElement.innerHTML = `<div class="text-6xl">${
+                            outfit.category === 'shirt' ? '👕' :
+                            outfit.category === 'pants' ? '👖' :
+                            outfit.category === 'dress' ? '👗' :
+                            outfit.category === 'shoes' ? '👟' :
+                            outfit.category === 'outerwear' ? '🧥' :
+                            outfit.category === 'accessory' ? '👜' : '👔'
+                          }</div>`;
+                        }}
+                      />
+                    ) : (
+                      <div className="text-6xl">
+                        {outfit.category === 'shirt' && '👕'}
+                        {outfit.category === 'pants' && '👖'}
+                        {outfit.category === 'dress' && '👗'}
+                        {outfit.category === 'shoes' && '👟'}
+                        {outfit.category === 'outerwear' && '🧥'}
+                        {outfit.category === 'accessory' && '👜'}
+                        {!['shirt', 'pants', 'dress', 'shoes', 'outerwear', 'accessory'].includes(outfit.category) && '👔'}
+                      </div>
+                    )}
                   </div>
                   <h3 className="font-semibold mb-2">{outfit.name}</h3>
                   <p className="text-sm text-muted-foreground mb-2">{outfit.style}</p>
@@ -442,7 +466,10 @@ Generate a high-quality, photorealistic result showing the complete outfit.`;
                     <p className="text-xs text-muted-foreground mb-3 line-clamp-2">{outfit.description}</p>
                   )}
                   <div className="flex justify-between items-center mb-3">
-                    <span className="text-accent font-bold">{outfit.price}</span>
+                    <div className="flex flex-col">
+                      <span className="text-accent font-bold">{outfit.price}</span>
+                      <span className="text-[10px] text-muted-foreground/60">Est. price</span>
+                    </div>
                     <span className="text-xs text-muted-foreground">{outfit.matchScore}% match</span>
                   </div>
                   <div className="flex gap-2">
