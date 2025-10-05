@@ -4,6 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ChevronLeft, Heart, Sparkles, ShoppingBag, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import outfit1 from "@/assets/outfit-1-denim-tee.jpg";
+import outfit2 from "@/assets/outfit-2-blazer.jpg";
+import outfit3 from "@/assets/outfit-3-dress.jpg";
+import outfit4 from "@/assets/outfit-4-streetwear.jpg";
 
 const Results = () => {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
@@ -22,10 +26,10 @@ const Results = () => {
 
   // Mock outfit recommendations
   const outfitRecommendations = [
-    { id: 1, name: 'Classic Denim & White Tee', price: '$89', style: 'Timeless casual', image: '🎽' },
-    { id: 2, name: 'Blazer & Trousers Combo', price: '$199', style: 'Professional chic', image: '👔' },
-    { id: 3, name: 'Flowy Summer Dress', price: '$129', style: 'Effortless elegance', image: '👗' },
-    { id: 4, name: 'Streetwear Hoodie Set', price: '$149', style: 'Urban cool', image: '🧥' },
+    { id: 1, name: 'Classic Denim & White Tee', price: '$89', style: 'Timeless casual', image: outfit1 },
+    { id: 2, name: 'Blazer & Trousers Combo', price: '$199', style: 'Professional chic', image: outfit2 },
+    { id: 3, name: 'Flowy Summer Dress', price: '$129', style: 'Effortless elegance', image: outfit3 },
+    { id: 4, name: 'Streetwear Hoodie Set', price: '$149', style: 'Urban cool', image: outfit4 },
   ];
 
   const toggleOutfitSelection = (id: number) => {
@@ -118,7 +122,13 @@ const Results = () => {
                   `}
                   onClick={() => toggleOutfitSelection(outfit.id)}
                 >
-                  <div className="text-7xl mb-4 text-center">{outfit.image}</div>
+                  <div className="aspect-square mb-4 rounded-lg overflow-hidden bg-muted">
+                    <img 
+                      src={outfit.image} 
+                      alt={outfit.name}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
                   <h3 className="font-semibold mb-2">{outfit.name}</h3>
                   <p className="text-sm text-muted-foreground mb-2">{outfit.style}</p>
                   <div className="flex justify-between items-center">
