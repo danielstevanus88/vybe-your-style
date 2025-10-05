@@ -7,18 +7,37 @@ import { toast } from "sonner";
 
 const SavedLooks = () => {
   const navigate = useNavigate();
-  const [savedLooks] = useState([
-    { id: 1, name: 'Summer Casual Look', date: '2025-10-03', outfits: 2 },
-    { id: 2, name: 'Office Professional', date: '2025-10-02', outfits: 3 },
-    { id: 3, name: 'Weekend Streetwear', date: '2025-10-01', outfits: 1 },
-  ]);
+  const [savedLooks, setSavedLooks] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('vybe_saved_looks') || '[]');
+    } catch {
+      return [];
+    }
+  });
 
   const handleDelete = (id: number) => {
-    toast.success("Look deleted");
+    const filtered = savedLooks.filter((s: any) => s.id !== id);
+    setSavedLooks(filtered);
+    localStorage.setItem('vybe_saved_looks', JSON.stringify(filtered));
+    toast.success('Look deleted');
   };
 
   const handleDownload = (id: number) => {
-    toast.success("Downloading images...");
+    const look = savedLooks.find((s: any) => s.id === id);
+    if (!look || !look.images || !look.images.length) {
+      toast.error('No images to download');
+      return;
+    }
+    // create zip-like download by triggering downloads sequentially
+    look.images.forEach((img: any, i: number) => {
+      const a = document.createElement('a');
+      a.href = img.src;
+      a.download = `${look.name.replace(/\s+/g,'_')}_${i+1}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+    toast.success('Downloading images...');
   };
 
   return (
@@ -49,7 +68,11 @@ const SavedLooks = () => {
               {savedLooks.map((look) => (
                 <Card key={look.id} className="p-6 shadow-elegant hover:shadow-2xl transition-smooth group">
                   <div className="aspect-square bg-muted rounded-xl mb-4 flex items-center justify-center overflow-hidden">
-                    <span className="text-8xl">👔</span>
+                    {look.images && look.images.length ? (
+                      <img src={look.images[0].src} alt={look.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-8xl">👔</span>
+                    )}
                   </div>
                   <h3 className="font-semibold text-lg mb-2">{look.name}</h3>
                   <p className="text-sm text-muted-foreground mb-4">

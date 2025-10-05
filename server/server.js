@@ -74,7 +74,7 @@ app.post('/api/generate', upload.array('images', 5), async (req, res) => {
     const serverPromptIntro =
       `Important: The first uploaded image is the person (subject). Any additional uploaded images are outfit images that should be used as clothing sources. ` +
       `Transfer clothing and details from the outfit images onto the subject in a realistic way. Preserve the subject's pose and scene lighting. ` +
-      `Do NOT add or remove body parts or extra people. If an outfit image depicts a dress, do NOT add pants or lower-body garments. ` +
+      `Do NOT add or remove body parts or extra people. ALWAYS MODIFY THE PERSON OUTFIT TO THE UPLOADED CLOTHES. If an outfit image depicts a dress, do NOT add pants or lower-body garments. ` +
       `For outerwear or hoodies, transfer top-layer details (hood, collar, texture) but do not obscure the face or change identity. ` +
       `Avoid compositing seams, text, watermarks, or UI. Frame the subject centrally (occupying ~60–80% of image height). Return a single PNG image only.`;
     contentParts.push({ text: serverPromptIntro });
@@ -162,6 +162,7 @@ Schema:
   "tags": [ string ]
 }
 
+
 Weights (sum to 1, vibe-forward):
 - vibe_match = 0.55
 - fit = 0.15
@@ -170,6 +171,7 @@ Weights (sum to 1, vibe-forward):
 - cohesion = 0.10
 
 Scoring guidance (two-decimal precision):
+- IMPORTANT: Look through all the details of the person: Shoes, Accessories, Shirts, Pants, Outerwear, Bags, Jewelry, Hats.
 - Compute overall_score = weighted sum of components.
 - Judge fit/color/proportions/cohesion ONLY in relation to how well they support the target vibe.
 - Penalize elements that clearly contradict the vibe (e.g., sneakers with formal tux).
@@ -206,6 +208,90 @@ Scoring guidance (two-decimal precision):
   } catch (err) {
     const body = err?.response?.body || err?.body || err?.message || String(err);
     console.error('feedback error:', body);
+    return res.status(500).json({ error: typeof body === 'string' ? body : String(body) });
+  }
+});
+
+// --- POST /api/recommendations  (AI-generated outfit recommendations) --------
+// Analyzes uploaded image and vibe, returns personalized outfit recommendations
+app.post('/api/recommendations', upload.single('image'), async (req, res) => {
+  try {
+    const vibe = (req.body.vibe || 'casual').toString().trim();
+    const file = req.file;
+
+    if (!file) return res.status(400).json({ error: 'Missing image file' });
+
+    // Inline the image directly
+    const filePart = {
+      inlineData: { data: file.buffer.toString('base64'), mimeType: file.mimetype }
+    };
+
+    const recommendationPrompt = `
+You are a professional fashion stylist and personal shopper.
+Analyze the uploaded image of a person and recommend 4 complete outfit items that match their style and the target vibe: "${vibe}".
+
+Return ONE valid JSON object only (no commentary, no markdown).
+Schema:
+{
+  "recommendations": [
+    {
+      "id": number (1-4),
+      "name": string (outfit item name, e.g., "Classic White Button-Down Shirt"),
+      "category": string (one of: "shirt", "pants", "dress", "shoes", "outerwear", "accessory"),
+      "style": string (short style description, e.g., "Professional chic"),
+      "price": string (estimated price with currency, e.g., "$89"),
+      "matchScore": number (85-98, how well it matches the person and vibe),
+      "searchQuery": string (Google Shopping search query, e.g., "white button down shirt women professional"),
+      "description": string (1-2 sentences about why this item works for them)
+    }
+  ]
+}
+
+Requirements:
+- Recommend a diverse mix: at least one top (shirt/dress/outerwear), one bottom (pants) or full outfit (dress), and one pair of shoes or accessory.
+- Base recommendations on the person's apparent style, body type, and color preferences visible in the image.
+- Match the target vibe "${vibe}" (e.g., formal = blazers, dress pants; casual = denim, tees; streetwear = hoodies, sneakers).
+- Provide realistic price estimates (range $50-$300 per item).
+- Make searchQuery specific enough for Google Shopping (include gender, style, color if relevant).
+- Ensure matchScore reflects how well the item suits both the person and the vibe (higher scores for better matches).
+`;
+
+    const resp = await ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: [{ role: 'user', parts: [{ text: recommendationPrompt }, filePart] }],
+      config: { responseModalities: ['TEXT'] },
+    });
+
+    const parts = resp?.candidates?.[0]?.content?.parts ?? [];
+    const textPart = parts.find(p => p.text) || {};
+    const text = textPart.text || parts.map(p => p.text).filter(Boolean).join('\n');
+
+    if (!text) {
+      const finish = resp?.candidates?.[0]?.finishReason || 'UNKNOWN';
+      return res.status(502).json({ error: 'Model did not return text', finishReason: finish });
+    }
+
+    // Strip code fences if present and parse JSON
+    const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/\s*```$/i, '');
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      return res.status(500).json({ error: 'Could not parse recommendations JSON', raw: text.slice(0, 1000) });
+    }
+
+    // Add Google Shopping links to each recommendation
+    if (parsed.recommendations && Array.isArray(parsed.recommendations)) {
+      parsed.recommendations = parsed.recommendations.map(rec => ({
+        ...rec,
+        shopLink: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(rec.searchQuery || rec.name)}`
+      }));
+    }
+
+    return res.json(parsed);
+  } catch (err) {
+    const body = err?.response?.body || err?.body || err?.message || String(err);
+    console.error('recommendations error:', body);
     return res.status(500).json({ error: typeof body === 'string' ? body : String(body) });
   }
 });
